@@ -12,12 +12,19 @@ Include the affected version, a minimal reproduction, impact, and any suggested 
 
 ## Supported versions
 
-Security fixes target the latest published `0.1.x` release and the current `main` branch. Older commits and local forks are not supported.
+Security fixes target the latest published `0.2.x` release and the current
+`main` branch. Older commits and local forks are not supported.
 
 ## Security boundaries
 
-- Upstream tokens are stored by magpie and are never written or logged by this plugin.
+- Browser tokens are stored by magpie. CLI-backed tokens remain in
+  `~/.atomcode/auth.toml`; renewals preserve unrelated content and use an
+  atomic private (`0600`) replacement.
+- Tokens are never logged or printed.
 - Signed model traffic is restricted to the official gateway origin; redirects are refused.
-- Configurable OAuth and CodingPlan endpoints must use HTTPS on the official AtomGit/GitCode domain families.
+- Configurable OAuth and CodingPlan endpoints must use the exact official hosts
+  on HTTPS port 443.
 - Upstream model URLs are accepted only when their origin matches the signed gateway.
 - OAuth login redirects are restricted to AtomGit and metadata responses are size-bounded.
+- Request bodies that cannot be replayed byte-for-byte are rejected; buffered
+  bodies are capped at 64 MiB.

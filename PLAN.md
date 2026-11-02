@@ -1,8 +1,12 @@
 # magpie-atomcode 插件制作规划
 
-- 版本：v1.6（2026-11-01）
-- 状态：**GitHub 已发布，维护加固完成**——仓库 https://github.com/aqiu817/magpie-atomcode ，main 分支，topic `magpie-plugin`；显示名 ATOMCODE；85/85 单测，行覆盖率 92.1%、函数覆盖率 90.9%；新增 Node/Bun CI、覆盖率门禁、安全/协作文档与 npm 打包冒烟。剩余外部动作：npm 发布、registry.json PR 与真实账号回归
-- 目标产物：magpie 供应商插件 `magpie-atomcode` —— 让所有 Agent 通过 magpie 使用 AtomCode（AtomGit CodingPlan）的模型，写作 `atomcode/<模型>`
+- 版本：v1.7（2026-11-03）
+- 状态：**可靠性加固与 workspace 迁移完成**——源码位于 `packages/atomcode`，发布包名 `@magpie-community/opencode-atomcode-auth` 0.2.0；127/127 单测通过，行/分支/函数覆盖率 93.48% / 80.91% / 91.61%；Magpie 0.1.2629 沙箱及真实端点 smoke 通过。剩余外部动作：提交、npm 首次发布与社区 registry 接入
+- 目标产物：magpie 供应商插件 —— 让所有 Agent 通过 magpie 使用 AtomCode（AtomGit CodingPlan）的模型，写作 `atomcode/<模型>`
+
+> 本文保留最初的产品与协议调研过程；当前实现、选项、安全边界和验证结果以
+> `packages/atomcode/README.md`、`packages/atomcode/README.zh-CN.md` 与
+> `packages/atomcode/CHANGELOG.md` 为准。
 
 ---
 

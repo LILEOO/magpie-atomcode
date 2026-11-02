@@ -67,6 +67,64 @@ export function originOf(value) {
 }
 
 /**
+ * Parse an upstream date as an instant. AtomGit's unzoned timestamps and
+ * date-only plan expiry are Beijing local time; the host machine's timezone
+ * must never decide when a quota or plan ends.
+ *
+ * @param {unknown} value
+ * @param {{dateOnlyEnd?: boolean}} [opts]
+ * @returns {number|undefined} epoch milliseconds
+ */
+export function parseAtomInstant(value, { dateOnlyEnd = true } = {}) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const raw = value.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return dateOnlyEnd ? Date.parse(`${raw}T23:59:59.999+08:00`) : Date.parse(`${raw}T00:00:00+08:00`);
+  }
+  const local = raw.replace(" ", "T");
+  const withZone = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(local)
+    ? `${local}+08:00`
+    : local;
+  const parsed = Date.parse(withZone);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/** An upstream timestamp as an RFC 3339 UTC string, when parseable. */
+export function atomInstantISO(value) {
+  const parsed = parseAtomInstant(value);
+  return parsed === undefined ? undefined : new Date(parsed).toISOString();
+}
+
+/** Short user-facing text without obvious credentials or identities. */
+export function redactText(value, max = 200) {
+  return String(value ?? "")
+    .replace(/\bBearer\s+[^\s,;"']+/gi, "Bearer [redacted]")
+    .replace(/\b((?:access|refresh|id)_token)\s*[:=]\s*[^\s,;"']+/gi, "$1=[redacted]")
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[redacted-email]")
+    .replace(/\b[A-Za-z0-9_-]{48,}\b/g, "[redacted]")
+    .slice(0, max);
+}
+
+/** The useful message from an upstream JSON error, never the raw body. */
+export function upstreamMessage(text) {
+  try {
+    const body = JSON.parse(String(text ?? ""));
+    if (typeof body?.message === "string" && body.message) return redactText(body.message);
+    if (typeof body?.error_description === "string" && body.error_description) {
+      return redactText(body.error_description);
+    }
+    if (typeof body?.error === "string" && body.error) return redactText(body.error);
+    if (typeof body?.code === "string" && body.code) return redactText(body.code);
+  } catch {
+    /* not JSON */
+  }
+  return "";
+}
+
+/**
  * Validate a URL that came from configuration or from upstream.
  *
  * Accepts only https, no embedded credentials, and a host that is one of
@@ -75,10 +133,13 @@ export function originOf(value) {
  * `undefined` means "not acceptable".
  *
  * @param {unknown} value
- * @param {{domains?: string[], allowSearch?: boolean, allowHash?: boolean}} [opts]
+ * @param {{domains?: string[], allowSearch?: boolean, allowHash?: boolean, exact?: boolean}} [opts]
  * @returns {string|undefined} the trimmed URL, or undefined when unusable.
  */
-export function trustedURL(value, { domains = [], allowSearch = false, allowHash = false } = {}) {
+export function trustedURL(
+  value,
+  { domains = [], allowSearch = false, allowHash = false, exact = false } = {},
+) {
   if (typeof value !== "string" || !value.trim()) return undefined;
   let url;
   try {
@@ -87,11 +148,18 @@ export function trustedURL(value, { domains = [], allowSearch = false, allowHash
     return undefined;
   }
   if (url.protocol !== "https:") return undefined;
+  if (url.port && url.port !== "443") return undefined;
   if (url.username || url.password) return undefined;
   if (!allowSearch && url.search) return undefined;
   if (!allowHash && url.hash) return undefined;
   const host = url.hostname.toLowerCase();
-  if (!domains.some((domain) => host === domain || host.endsWith(`.${domain}`))) return undefined;
+  if (
+    !domains.some((domain) =>
+      exact ? host === domain : host === domain || host.endsWith(`.${domain}`)
+    )
+  ) {
+    return undefined;
+  }
   return value.trim();
 }
 
@@ -164,11 +232,14 @@ export const TRUSTED_SERVICE_DOMAINS = ["atomgit.com", "gitcode.com"];
  * option must not take the whole provider down.
  *
  * @param {unknown} value
- * @param {{fallback: string, domains?: string[], onReject?: Function}} opts
+ * @param {{fallback: string, domains?: string[], exact?: boolean, onReject?: Function}} opts
  * @returns {string}
  */
-export function trustedServiceURL(value, { fallback, domains = TRUSTED_SERVICE_DOMAINS, onReject } = {}) {
-  const accepted = trustedURL(value, { domains });
+export function trustedServiceURL(
+  value,
+  { fallback, domains = TRUSTED_SERVICE_DOMAINS, exact = false, onReject } = {},
+) {
+  const accepted = trustedURL(value, { domains, exact });
   if (accepted) return accepted;
   if (typeof value === "string" && value.trim()) {
     try {

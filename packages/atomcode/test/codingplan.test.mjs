@@ -98,6 +98,21 @@ test("planNeedsClaim：remaining_days ≤ 0 → 需要重领", () => {
   );
 });
 
+test("planNeedsClaim：remaining_days 为 null/undefined 时视为未知，不误触发", () => {
+  for (const remaining_days of [null, undefined]) {
+    assert.equal(
+      planNeedsClaim({
+        codingplan_free: {
+          plan_name: "CodingPlan Pro",
+          remaining_days,
+          expires_at: "2099-01-01",
+        },
+      }),
+      false,
+    );
+  }
+});
+
 test("planNeedsClaim：expires_at 过期超 24h → 需要重领；24h 宽限内 → false", () => {
   const now = Date.parse("2026-10-16T12:00:00Z");
   assert.equal(

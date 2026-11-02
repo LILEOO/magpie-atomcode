@@ -70,15 +70,21 @@ export function sanitizeModelKey(value) {
 /** The observed 2026-10-16 catalog, in `models-v2` row shape. */
 export const FALLBACK_MODELS = [
   {
+    display_model_name: "glm5.3-flash",
+    context_window: 512000,
+    reasoning_effort_levels: ["low", "high"],
+    supports_vision: true,
+  },
+  {
     display_model_name: "qwen3.8-27b",
     context_window: 262144,
     reasoning_effort_levels: ["low", "medium", "xhigh"],
     supports_vision: true,
   },
   {
-    display_model_name: "glm5.3-flash",
-    context_window: 512000,
-    reasoning_effort_levels: ["low", "high"],
+    display_model_name: "deepseek-flash",
+    context_window: 1000000,
+    reasoning_effort_levels: ["high", "max"],
     supports_vision: true,
   },
 ];
@@ -107,11 +113,12 @@ export function normalizeCodingPlanModel(raw = {}, { output = DEFAULT_OUTPUT, on
       /* the reporter is best-effort */
     }
   }
+  const declaredOutput = num(raw.max_output_tokens ?? raw.max_completion_tokens ?? raw.output_token_limit);
   return {
     id,
     key: sanitizeModelKey(id),
     context: num(raw.context_window) > 0 ? num(raw.context_window) : DEFAULT_CONTEXT,
-    output,
+    output: declaredOutput > 0 ? declaredOutput : output,
     levels,
     vision: raw.supports_vision === true,
     type: typeof raw.type === "string" && raw.type ? raw.type : "openai",
@@ -130,7 +137,11 @@ export function toConfigModel(m = {}) {
     modalities: { input: m.vision === true ? ["text", "image"] : ["text"], output: ["text"] },
     limit: { context: m.context ?? DEFAULT_CONTEXT, output: m.output ?? DEFAULT_OUTPUT },
   };
-  if (levels.length) entry.variants = Object.fromEntries(levels.map((l) => [l, {}]));
+  if (levels.length) {
+    entry.variants = Object.fromEntries(
+      levels.map((level) => [level, { reasoningEffort: level }]),
+    );
+  }
   if (m.key && m.id && m.key !== m.id) entry.id = m.id;
   return entry;
 }
@@ -158,7 +169,9 @@ export function toProviderModel(m = {}, providerID, { baseURL = DEFAULT_BASE_URL
       interleaved: false,
     },
     release_date: "",
-    variants: Object.fromEntries(levels.map((l) => [l, {}])),
+    variants: Object.fromEntries(
+      levels.map((level) => [level, { reasoningEffort: level }]),
+    ),
   };
 }
 

@@ -5,6 +5,7 @@ import {
   credentialsOf,
   originOf,
   readCappedResponseText,
+  redactText,
   trustedServiceURL,
   trustedURL,
 } from "../internal.mjs";
@@ -33,6 +34,11 @@ test("trustedURL：明文、内嵌凭证、相近域名、非法输入一律拒�
   assert.equal(trustedURL(undefined, { domains }), undefined);
   assert.equal(trustedURL(123, { domains }), undefined);
   assert.equal(trustedURL("https://acs.atomgit.com", {}), undefined, "没有白名单时不得放行");
+  assert.equal(
+    trustedURL("https://acs.atomgit.com:8443", { domains }),
+    undefined,
+    "非 443 端口必须拒绝",
+  );
 });
 
 test("trustedURL：基础端点默认拒绝 query/hash，登录跳转可显式放行", () => {
@@ -98,6 +104,17 @@ test("credentialsOf：缺少 access 时无法签名，uid 统一转字符串", (
   assert.equal(credentialsOf({ access: "" }), undefined);
   assert.equal(credentialsOf(null), undefined);
   assert.equal(credentialsOf({ access: "tok", uid: 42 }).uid, "42");
+});
+
+test("redactText：令牌、邮箱和长密钥都不会进入日志", () => {
+  const secret = "a".repeat(64);
+  const text = redactText(
+    `access_token=access-secret refresh_token: refresh-secret Bearer bearer-secret alice@example.com ${secret}`,
+  );
+  assert.match(text, /access_token=\[redacted\]/);
+  assert.match(text, /refresh_token=\[redacted\]/);
+  assert.doesNotMatch(text, /access-secret|refresh-secret|bearer-secret|alice@example\.com/);
+  assert.doesNotMatch(text, new RegExp(secret));
 });
 
 test("readCappedResponseText：流式读取超过上限时立即取消", async () => {

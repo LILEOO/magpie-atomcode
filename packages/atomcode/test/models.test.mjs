@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 
 import {
   DEFAULT_BASE_URL,
+  DEFAULT_CONTEXT,
+  DEFAULT_OUTPUT,
   normalizeCodingPlanModel,
+  sanitizeModelKey,
+  toConfigModel,
   toProviderModel,
   trustedModelBaseURL,
 } from "../models.mjs";
@@ -103,4 +107,76 @@ test("toProviderModel：模型没有可用 base_url 时落到调用方给的官�
   const providerModel = toProviderModel(model, "atomcode", { baseURL: DEFAULT_BASE_URL });
   assert.equal(providerModel.api.url, DEFAULT_BASE_URL);
   assert.equal(providerModel.api.id, "m1");
+});
+
+test("reasoning variants carry the request option agents merge", () => {
+  const m = normalizeCodingPlanModel({
+    display_model_name: "qwen3.8-27b",
+    context_window: 262144,
+    reasoning_effort_levels: ["low", "medium", "xhigh"],
+  });
+  assert.deepEqual(toConfigModel(m).variants, {
+    low: { reasoningEffort: "low" },
+    medium: { reasoningEffort: "medium" },
+    xhigh: { reasoningEffort: "xhigh" },
+  });
+  assert.deepEqual(toProviderModel(m, "atomcode").variants, {
+    low: { reasoningEffort: "low" },
+    medium: { reasoningEffort: "medium" },
+    xhigh: { reasoningEffort: "xhigh" },
+  });
+});
+
+test("model output limit honours upstream declarations before the plugin fallback", () => {
+  const declared = normalizeCodingPlanModel(
+    { display_model_name: "declared", max_output_tokens: 64000 },
+    { output: 32768 },
+  );
+  const fallback = normalizeCodingPlanModel({ display_model_name: "fallback" }, { output: 32768 });
+  assert.equal(declared.output, 64000);
+  assert.equal(fallback.output, 32768);
+});
+
+test("catalog rows tolerate malformed optional fields", () => {
+  assert.equal(normalizeCodingPlanModel(), null);
+  assert.equal(normalizeCodingPlanModel({ display_model_name: 42 }), null);
+
+  const model = normalizeCodingPlanModel({
+    display_model_name: "  unsafe/model  ",
+    reasoning_effort_levels: [" low ", "", null, 7, "high"],
+    context_window: "not-a-number",
+    max_output_tokens: null,
+    max_completion_tokens: null,
+    output_token_limit: "invalid",
+    base_url: 42,
+    supports_vision: false,
+    type: "",
+  });
+  assert.deepEqual(model, {
+    id: "unsafe/model",
+    key: "unsafe_model",
+    context: DEFAULT_CONTEXT,
+    output: DEFAULT_OUTPUT,
+    levels: ["low", "high"],
+    vision: false,
+    type: "openai",
+    baseURL: undefined,
+  });
+});
+
+test("model factories provide stable defaults for empty rows", () => {
+  assert.equal(sanitizeModelKey(), "");
+  const configModel = toConfigModel();
+  assert.equal(configModel.name, undefined);
+  assert.equal(configModel.reasoning, false);
+  assert.equal(configModel.limit.context, DEFAULT_CONTEXT);
+  assert.equal(configModel.limit.output, DEFAULT_OUTPUT);
+  assert.equal(Object.hasOwn(configModel, "variants"), false);
+
+  const providerModel = toProviderModel();
+  assert.equal(providerModel.id, undefined);
+  assert.equal(providerModel.name, undefined);
+  assert.equal(providerModel.api.url, DEFAULT_BASE_URL);
+  assert.equal(providerModel.capabilities.reasoning, false);
+  assert.deepEqual(providerModel.variants, {});
 });

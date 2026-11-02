@@ -18,7 +18,12 @@
  * @module magpie-atomcode/codingplan
  */
 
-import { DEFAULT_CLIENT_VERSION, readCappedResponseText } from "./internal.mjs";
+import {
+  DEFAULT_CLIENT_VERSION,
+  parseAtomInstant,
+  readCappedResponseText,
+  upstreamMessage,
+} from "./internal.mjs";
 
 const withBase = (base, path) => `${String(base).replace(/\/+$/, "")}/${path}`;
 
@@ -61,9 +66,12 @@ export function planNeedsClaim(status, now = Date.now()) {
   const plan = planOf(status);
   if (!plan) return true;
   if (typeof plan.plan_name !== "string" || !plan.plan_name.trim()) return true;
-  const remaining = Number(plan.remaining_days);
+  const remaining =
+    plan.remaining_days === null || plan.remaining_days === undefined
+      ? undefined
+      : Number(plan.remaining_days);
   if (Number.isFinite(remaining) && remaining <= 0) return true;
-  const expires = Date.parse(plan.expires_at ?? "");
+  const expires = parseAtomInstant(plan.expires_at);
   if (Number.isFinite(expires) && now > expires + 24 * 3600_000) return true;
   return false;
 }
@@ -90,7 +98,10 @@ async function request(
   });
   const text = await readCappedResponseText(res, { label: "CodingPlan response" });
   if (!res.ok) {
-    const error = new Error(`CodingPlan returned ${res.status}: ${text.slice(0, 200) || "empty response"}`);
+    const message = upstreamMessage(text);
+    const error = new Error(
+      `CodingPlan returned HTTP ${res.status}${message ? `: ${message}` : ""}`,
+    );
     error.status = res.status;
     if (res.status === 401 || res.status === 403) error.signIn = "expired";
     throw error;
@@ -98,7 +109,7 @@ async function request(
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`CodingPlan did not answer JSON: ${text.slice(0, 120) || "empty response"}`);
+    throw new Error("CodingPlan did not answer JSON");
   }
 }
 
@@ -142,11 +153,22 @@ export async function fetchModels(base, token, tier, opts = {}) {
 export async function claimCodingPlan(
   base,
   token,
-  { fetchImpl = (...args) => fetch(...args), clientVersion = DEFAULT_CLIENT_VERSION, timeoutMs = 8_000 } = {},
+  {
+    fetchImpl = (...args) => fetch(...args),
+    clientVersion = DEFAULT_CLIENT_VERSION,
+    timeoutMs = 8_000,
+    totalTimeoutMs = 24_000,
+  } = {},
 ) {
   let lastMessage = "no Coding Plan tier is currently available";
   const attempts = [];
+  const deadline = Date.now() + totalTimeoutMs;
   for (const tier of ["Max", "Pro", "Lite"]) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      lastMessage = "CodingPlan claim timed out";
+      break;
+    }
     let status = 0;
     let response = null;
     let raw = "";
@@ -161,7 +183,7 @@ export async function claimCodingPlan(
           "user-agent": `atomcode/${clientVersion}`,
         },
         body: JSON.stringify({ plan_type: tier }),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(Math.max(1, Math.min(timeoutMs, remaining))),
       });
       status = res.status;
       raw = await readCappedResponseText(res, { label: "CodingPlan claim response" });
@@ -182,7 +204,7 @@ export async function claimCodingPlan(
         ? response.message
         : response
           ? ""
-          : raw.slice(0, 200) || `HTTP ${status}`;
+          : upstreamMessage(raw) || `HTTP ${status}`;
     attempts.push({ tier, httpStatus: status, success, duplicate, message });
     if (success || duplicate) {
       return {

@@ -75,14 +75,14 @@ async function call(
   });
   const text = await readCappedResponseText(res, { label: "OAuth broker response" });
   if (!res.ok) {
-    const error = new Error(`broker returned ${res.status}: ${text.slice(0, 200) || "empty response"}`);
+    const error = new Error(`OAuth broker returned HTTP ${res.status}`);
     error.status = res.status;
     throw error;
   }
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`broker did not answer JSON: ${text.slice(0, 120) || "empty response"}`);
+    throw new Error("OAuth broker did not answer JSON");
   }
 }
 

@@ -1,62 +1,18 @@
 {
-  "name": "magpie-atomcode",
-  "version": "0.1.0",
-  "description": "ATOMCODE for Magpie: AtomCode (AtomGit CodingPlan) as a provider — browser OAuth sign-in, atomcode-signing-v1 signed requests, native daily check-in (plan claim), and the 5-hour quota window on every account row",
+  "name": "magpie-atomcode-workspace",
+  "private": true,
   "type": "module",
-  "main": "./index.mjs",
-  "exports": {
-    ".": "./index.mjs"
-  },
-  "files": [
-    "index.mjs",
-    "internal.mjs",
-    "sign.mjs",
-    "oauth.mjs",
-    "codingplan.mjs",
-    "quota.mjs",
-    "models.mjs",
-    "i18n.mjs",
-    "version.mjs",
-    "assets/",
-    "README.md",
-    "README.zh-CN.md",
-    "CHANGELOG.md",
-    "NOTICE.md",
-    "SECURITY.md",
-    "LICENSE"
+  "workspaces": [
+    "packages/*"
   ],
-  "keywords": [
-    "magpie",
-    "magpie-plugin",
-    "opencode",
-    "opencode-plugin",
-    "opencode-auth",
-    "opencode-provider",
-    "atomcode",
-    "atomgit",
-    "codingplan",
-    "openai-compatible"
-  ],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/aqiu817/magpie-atomcode.git"
-  },
-  "homepage": "https://github.com/aqiu817/magpie-atomcode#readme",
-  "bugs": {
-    "url": "https://github.com/aqiu817/magpie-atomcode/issues"
+  "scripts": {
+    "test": "npm test --workspace @magpie-community/opencode-atomcode-auth",
+    "test:bun": "bun test packages/atomcode/test/*.test.mjs",
+    "test:coverage:enforce": "npm run test:coverage:enforce --workspace @magpie-community/opencode-atomcode-auth",
+    "pack:check": "npm run pack:check --workspace @magpie-community/opencode-atomcode-auth",
+    "test:live": "npm run test:live --workspace @magpie-community/opencode-atomcode-auth"
   },
   "engines": {
     "node": ">=20"
-  },
-  "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "test:coverage": "node --experimental-test-coverage --test test/*.test.mjs",
-    "test:coverage:enforce": "node --experimental-test-coverage --test-coverage-lines=85 --test-coverage-branches=75 --test-coverage-functions=85 --test test/*.test.mjs",
-    "pack:check": "npm pack --dry-run --json"
-  },
-  "magpie": {
-    "icon": "https://atomgit.com/favicon.ico",
-    "maxConcurrency": 4
   }
 }

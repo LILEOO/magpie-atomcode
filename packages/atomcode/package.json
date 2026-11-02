@@ -1,0 +1,69 @@
+{
+  "name": "@magpie-community/opencode-atomcode-auth",
+  "version": "0.2.0",
+  "description": "AtomCode (AtomGit CodingPlan) for Magpie and OpenCode: browser OAuth or local CLI sign-in, signed requests, native plan claim, live models and quota windows",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs",
+  "files": [
+    "index.mjs",
+    "internal.mjs",
+    "auth-file.mjs",
+    "request-body.mjs",
+    "sign.mjs",
+    "oauth.mjs",
+    "codingplan.mjs",
+    "quota.mjs",
+    "models.mjs",
+    "i18n.mjs",
+    "version.mjs",
+    "assets/",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "NOTICE.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "magpie",
+    "magpie-plugin",
+    "opencode",
+    "opencode-plugin",
+    "opencode-auth",
+    "opencode-provider",
+    "atomcode",
+    "atomgit",
+    "codingplan",
+    "openai-compatible"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aqiu817/magpie-atomcode.git",
+    "directory": "packages/atomcode"
+  },
+  "homepage": "https://github.com/aqiu817/magpie-atomcode/tree/main/packages/atomcode#readme",
+  "bugs": {
+    "url": "https://github.com/aqiu817/magpie-atomcode/issues"
+  },
+  "engines": {
+    "node": ">=20",
+    "magpie": ">=0.1.2563"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:coverage": "node --experimental-test-coverage --test test/*.test.mjs",
+    "test:coverage:enforce": "node --experimental-test-coverage --test-coverage-lines=85 --test-coverage-branches=80 --test-coverage-functions=85 --test test/*.test.mjs",
+    "test:live": "node scripts/live-smoke.mjs",
+    "pack:check": "npm pack --dry-run --json"
+  },
+  "magpie": {
+    "icon": "https://atomgit.com/favicon.ico",
+    "maxConcurrency": 4
+  }
+}

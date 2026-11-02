@@ -39,7 +39,7 @@ test("quotaFromStatus maps every rate-limit window", () => {
 
   assert.equal(usage.plan, "CodingPlan Pro");
   assert.equal(usage.user, "alice");
-  assert.equal(usage.until, "2026-12-01");
+  assert.equal(usage.until, "2026-12-01T15:59:59.999Z");
   assert.equal(usage.windows.length, 2);
   assert.deepEqual(usage.windows[0], {
     name: "5h window",
@@ -83,4 +83,43 @@ test("quotaFromStatus returns a stable empty shape for malformed status", () => 
     plan: "AtomCode CodingPlan",
     windows: [],
   });
+});
+
+test("quotaFromStatus keeps unknown shares unknown and trusts each window's own data", () => {
+  const usage = quotaFromStatus(
+    {
+      codingplan_free: { plan_name: "Plan", remaining_days: null, expires_at: "2099-12-31" },
+      current_usage: { usage_percent: 99, window_hours: 5, reset_at: "2099-12-31T10:00:00" },
+      rate_limit_windows: [
+        { window_hours: 5, call_limit: 100, usage_percent: 12, reset_at: "2099-12-31T10:00:00" },
+        { window_hours: 24 },
+      ],
+    },
+    t,
+  );
+  assert.equal(usage.windows[0].used, 12);
+  assert.equal(usage.windows[0].amount, undefined);
+  assert.equal(usage.windows[1].used, undefined);
+  assert.equal(usage.windows[1].amount, undefined);
+});
+
+test("quotaFromStatus adds a token window only when token usage is explicit", () => {
+  const usage = quotaFromStatus(
+    {
+      codingplan_free: { plan_name: "Plan" },
+      current_usage: {
+        window_hours: 5,
+        window_tokens_used: 250000,
+        window_token_limit: 1000000,
+        seconds_until_reset: 60,
+      },
+      rate_limit_windows: [],
+    },
+    t,
+  );
+  assert.equal(usage.windows.length, 1);
+  assert.equal(usage.windows[0].unit, "tokens");
+  assert.equal(usage.windows[0].used, 25);
+  assert.equal(usage.windows[0].amount, 250000);
+  assert.equal(usage.windows[0].limit, 1000000);
 });
