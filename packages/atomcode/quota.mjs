@@ -134,6 +134,10 @@ function rawCallWindow(raw, t, usage) {
   };
 }
 
+function hasAnyValue(...values) {
+  return values.some((value) => value !== undefined);
+}
+
 /**
  * Build the `auth.usage` payload from a `status-v2` response.
  *
@@ -150,12 +154,6 @@ export function quotaFromStatus(status, t, { user } = {}) {
   const rawWindows = Array.isArray(status?.rate_limit_windows)
     ? status.rate_limit_windows.filter((w) => w && typeof w === "object")
     : [];
-  const token = tokenWindow(
-    usage,
-    num(usage.window_hours) ?? 5,
-    resetOf(usage),
-    t,
-  );
   const seen = new Set();
   const addWindow = (window) => {
     seen.add(`${window.unit}:${window.span}`);
@@ -164,11 +162,12 @@ export function quotaFromStatus(status, t, { user } = {}) {
   for (const raw of rawWindows) {
     const unit = rawUnit(raw);
     const tokens = tokenValues(raw);
+    const calls = callValues(raw);
+    const hasCallFields = hasAnyValue(calls.amount, calls.limit, calls.used);
+    const hasTokenFields = hasAnyValue(tokens.amount, tokens.limit, tokens.used);
     const hasToken =
       unit === "tokens" ||
-      tokens.amount !== undefined ||
-      tokens.limit !== undefined ||
-      tokens.used !== undefined;
+      (unit === undefined && !hasCallFields && hasTokenFields);
     const hasCall = !hasToken;
     if (hasToken) {
       const window = rawTokenWindow(raw, t, usage);
@@ -186,10 +185,21 @@ export function quotaFromStatus(status, t, { user } = {}) {
   }
   const currentHours = num(usage.window_hours) ?? 5;
   const currentSpan = currentHours * 3600;
+  const currentUnit = rawUnit(usage);
+  const currentToken =
+    currentUnit === "tokens"
+      ? tokenWindow(usage, currentHours, resetOf(usage), t) ?? {
+          name: fill(t.windowTokens, { hours: currentHours }),
+          span: currentSpan,
+          unit: "tokens",
+          ...resetOf(usage),
+        }
+      : undefined;
   if (
+    currentUnit !== "tokens" &&
     !seen.has(`calls:${currentSpan}`) &&
     (num(usage.usage_percent) !== undefined ||
-      (!token && num(usage.window_hours) !== undefined))
+      num(usage.window_hours) !== undefined)
   ) {
     // No window row (older shape?): fall back to the current_usage block.
     const used = num(usage.usage_percent);
@@ -201,8 +211,8 @@ export function quotaFromStatus(status, t, { user } = {}) {
       ...resetOf(usage),
     });
   }
-  if (token && !seen.has(`tokens:${token.span}`)) {
-    addWindow(token);
+  if (currentToken && !seen.has(`tokens:${currentToken.span}`)) {
+    addWindow(currentToken);
   }
 
   return {

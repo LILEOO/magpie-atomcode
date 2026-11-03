@@ -45,6 +45,9 @@ Keep a Changelog and the project uses semantic versioning.
 - A missing native switch value now matches the settings UI's enabled default.
 - The published package uses an explicit file list, so editor backup/upload
   sidecars cannot enter the npm tarball.
+- Upstream legacy `window_token_*` fields that contain call counts are no longer
+  mislabeled as token quotas. Token-only rows are inferred from token-specific
+  fields without call counters; `current_usage` also requires an explicit unit.
 
 ### Security
 

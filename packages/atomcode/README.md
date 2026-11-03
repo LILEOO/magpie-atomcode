@@ -32,7 +32,8 @@ https://llm-api.atomgit.com/v1 (OpenAI-compatible, SSE streams back untouched)
   reasoning-effort variants are declared to the host.
 - **Daily check-in (`checkin`)**: scheduled by magpie's native check-in toggle. Plan valid → done; expired/missing → the official Max→Pro→Lite cascade re-claims it; quota exhausted → failed with the upstream reason.
 - **Quota windows**: plan name, expiry, every upstream rate-limit window, and a
-  token window when upstream supplies one, updating live.
+  token window only when upstream supplies token-specific fields without call
+  counters (or explicitly declares token units), updating live.
 - **Native controls**: `auto_claim` and `auto_version` appear as provider
   switches in Magpie and default on; the older camelCase options still override
   them for compatibility.

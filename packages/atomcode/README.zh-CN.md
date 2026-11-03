@@ -29,8 +29,8 @@ https://llm-api.atomgit.com/v1（OpenAI 兼容，SSE 原样流回）
 - **直连 AtomGit**：不需要 Atom2Api 常驻；流式、工具调用和推理档位 variants
   都声明给宿主。
 - **每日签到（checkin）**：magpie 原生签到开关调度。套餐有效 → done；到期/缺失 → 按官方 Max→Pro→Lite 级联自动重领；名额满 → failed 并显示上游原因。
-- **额度窗口**：显示套餐名、到期时间、上游返回的每个限流窗口，并在上游提供
-  token 口径时一并显示。
+- **额度窗口**：显示套餐名、到期时间、上游返回的每个限流窗口；只有上游给出
+  token 专用字段且没有调用计数（或明确声明 token 单位）时才显示 token 窗口。
 - **原生开关**：`auto_claim` / `auto_version` 会出现在 Magpie 供应商设置里，
   默认开启；旧的 camelCase 选项仍可覆盖它们，保持兼容。
 - **重启后可恢复**：最近一次成功的模型目录与额度快照会落盘。临时刷新失败时
