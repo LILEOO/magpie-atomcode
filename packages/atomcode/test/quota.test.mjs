@@ -123,3 +123,64 @@ test("quotaFromStatus adds a token window only when token usage is explicit", ()
   assert.equal(usage.windows[0].amount, 250000);
   assert.equal(usage.windows[0].limit, 1000000);
 });
+
+test("quotaFromStatus separates token and call rows and honours explicit units", () => {
+  const usage = quotaFromStatus(
+    {
+      codingplan_free: { plan_name: "Plan" },
+      current_usage: {
+        usage_percent: 20,
+        window_tokens_used: 500,
+        window_token_limit: 1000,
+        window_hours: 5,
+      },
+      rate_limit_windows: [
+        {
+          unit: "tokens",
+          window_hours: 24,
+          tokens_used: 400,
+          token_limit: 2000,
+          token_usage_percent: 20,
+        },
+        {
+          unit: "calls",
+          window_hours: 5,
+          requests_used: 10,
+          requests_limit: 100,
+        },
+        {
+          window_hours: 7,
+          call_limit: 50,
+          calls_used: 5,
+        },
+      ],
+    },
+    t,
+  );
+  assert.deepEqual(
+    usage.windows.map((window) => [window.unit, window.span, window.used]),
+    [
+      ["tokens", 86400, 20],
+      ["calls", 18000, 10],
+      ["calls", 25200, 10],
+      ["tokens", 18000, 50],
+    ],
+  );
+  assert.equal(usage.windows[0].display, "400 / 2000 tokens");
+  assert.equal(usage.windows[1].display, "10 / 100 calls");
+});
+
+test("quotaFromStatus keeps an explicit token window unknown instead of inventing zero", () => {
+  const usage = quotaFromStatus(
+    {
+      codingplan_free: { plan_name: "Plan" },
+      current_usage: {},
+      rate_limit_windows: [{ unit: "tokens", window_hours: 3 }],
+    },
+    t,
+  );
+  assert.equal(usage.windows.length, 1);
+  assert.equal(usage.windows[0].unit, "tokens");
+  assert.equal(usage.windows[0].used, undefined);
+  assert.equal(usage.windows[0].amount, undefined);
+});

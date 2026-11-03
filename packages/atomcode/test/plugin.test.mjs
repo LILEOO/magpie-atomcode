@@ -229,7 +229,7 @@ test("checkin：duplicate（本来就持有）→ done 而不是 claimed", async
   assert.equal(result.outcome, "done");
 });
 
-test("checkin：上游拒绝（日限额已满）→ failed，透出上游 message", async () => {
+test("checkin：名额耗尽 → ineligible，透出上游 message", async () => {
   const expired = {
     ...VALID_STATUS,
     codingplan_free: { ...VALID_STATUS.codingplan_free, remaining_days: 0, expires_at: "2020-01-01" },
@@ -239,7 +239,7 @@ test("checkin：上游拒绝（日限额已满）→ failed，透出上游 messa
     statusBody: expired,
     claimResponses: [full, full, full],
   });
-  assert.equal(result.outcome, "failed");
+  assert.equal(result.outcome, "ineligible");
   assert.match(result.message, /日限额|no tier/);
 });
 
@@ -1087,6 +1087,7 @@ test("options：非法数值、版本号和布尔值回退默认并告警", asyn
       masterKeyHex: "not-a-key",
       quotaTtlMs: Infinity,
       maxOutputTokens: -1,
+      diagnosticsPort: 80,
     },
   );
 
@@ -1097,6 +1098,7 @@ test("options：非法数值、版本号和布尔值回退默认并告警", asyn
     "masterKeyHex",
     "quotaTtlMs",
     "maxOutputTokens",
+    "diagnosticsPort",
   ]) {
     assert.ok(logs.some((line) => line.includes(name)), `missing warning for ${name}`);
   }
@@ -1147,4 +1149,277 @@ test("options：合法自定义 masterKey 被采纳且不误告警", async () =>
     { autoVersion: false, masterKeyHex },
   );
   assert.ok(logs.every((line) => !line.includes("masterKeyHex")));
+});
+
+test("native settings：声明布尔开关，并让显式旧选项优先于 Magpie 开关", async () => {
+  const expired = {
+    ...VALID_STATUS,
+    codingplan_free: {
+      ...VALID_STATUS.codingplan_free,
+      remaining_days: 0,
+      expires_at: "2020-01-01",
+    },
+  };
+  const stub = stubFetch({
+    statusBody: expired,
+    modelsBody: [],
+    claimResponses: [
+      { body: JSON.stringify({ success: true, duplicate: false, plan_name: "CodingPlan Lite" }) },
+    ],
+  });
+  const nativeReads = [];
+  try {
+    const plugin = await AtomCodePlugin(
+      {
+        magpie: {
+          option: (provider, key) => {
+            nativeReads.push([provider, key]);
+            if (key === "auto_claim") return false;
+            if (key === "auto_version") return true;
+            return undefined;
+          },
+        },
+      },
+      {
+        autoClaim: true,
+        autoVersion: false,
+        diagnosticsPort: 39278,
+      },
+    );
+    assert.deepEqual(
+      plugin.auth.options.map((option) => option.key),
+      ["auto_claim", "auto_version"],
+    );
+    assert.equal(plugin.auth.options[0].labels.zh.length > 0, true);
+    assert.equal(plugin.auth.options[0].descriptions.en.length > 0, true);
+    assert.equal(plugin.auth.options[0].default, true);
+    assert.equal(plugin.auth.options[1].default, true);
+
+    await plugin.provider.models({}, { auth: AUTH });
+    assert.equal(
+      stub.calls.filter((call) => call.url.includes("claim-v2")).length,
+      1,
+      "显式 autoClaim=true 应压过原生 false",
+    );
+    assert.equal(
+      stub.calls.filter((call) => call.url.includes("raw.atomgit.com")).length,
+      0,
+      "显式 autoVersion=false 应压过原生 true",
+    );
+    assert.deepEqual(nativeReads, [], "显式旧选项存在时不应再读取原生开关");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("native settings：未设置旧选项时读取 Magpie 的自动领取开关", async () => {
+  const expired = {
+    ...VALID_STATUS,
+    codingplan_free: {
+      ...VALID_STATUS.codingplan_free,
+      remaining_days: 0,
+      expires_at: "2020-01-01",
+    },
+  };
+  const stub = stubFetch({
+    statusBody: expired,
+    modelsBody: [],
+    claimResponses: [
+      { body: JSON.stringify({ success: true, duplicate: false, plan_name: "CodingPlan Lite" }) },
+    ],
+  });
+  try {
+    const plugin = await AtomCodePlugin(
+      {
+        magpie: {
+          option: (_provider, key) => (key === "auto_claim" ? false : undefined),
+        },
+      },
+      { autoVersion: false, diagnosticsPort: 39279 },
+    );
+    await plugin.provider.models({}, { auth: AUTH });
+    assert.equal(stub.calls.filter((call) => call.url.includes("claim-v2")).length, 0);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("CLI sign-in：自定义绝对路径会进入结果并用于读取", async () => {
+  const home = await mkdtemp(join(tmpdir(), "atomcode-custom-path-"));
+  const file = join(home, "custom", "atomcode-auth.toml");
+  await mkdir(join(home, "custom"), { mode: 0o700 });
+  await writeFile(
+    file,
+    'access_token = "custom-access"\nrefresh_token = "custom-refresh"\ncreated_at = 1800000000\nexpires_in = 3600\n[user]\nid = 77\n',
+    { mode: 0o600 },
+  );
+  try {
+    const plugin = await AtomCodePlugin({}, { autoVersion: false });
+    const method = plugin.auth.methods[1];
+    assert.equal(method.prompts[0].key, "authFile");
+    assert.equal(method.prompts[0].validate("relative.toml"), method.prompts[0].validate("../bad"));
+    const flow = await method.authorize({ authFile: file });
+    const result = await flow.callback();
+    assert.equal(result.type, "success");
+    assert.equal(result.authFile, file);
+    assert.equal(result.access, "custom-access");
+    assert.equal(result.uid, "77");
+    await assert.rejects(
+      () => method.authorize({ authFile: "relative.toml" }),
+      /absolute or start with/,
+    );
+  } finally {
+    // Temporary directory is intentionally left for the OS to clean up.
+  }
+});
+
+test("loader：凭证类 403 会续期一次，额度类 403 保留登录且不续期", async () => {
+  const credentialStub = stubFetch({
+    statusBody: VALID_STATUS,
+    chatResponses: [
+      { status: 403, body: JSON.stringify({ message: "session token expired" }) },
+      { status: 200, body: "{}" },
+    ],
+    refreshResponses: [
+      {
+        body: JSON.stringify({
+          access_token: "forbidden-retry",
+          refresh_token: "forbidden-refresh",
+          expires_in: 3600,
+        }),
+      },
+    ],
+  });
+  try {
+    const plugin = await AtomCodePlugin({}, { autoVersion: false });
+    const auth = {
+      ...AUTH,
+      refresh: "old-forbidden-refresh",
+      expires: Date.now() + 3600_000,
+    };
+    const { fetch: patched } = await plugin.auth.loader(async () => auth);
+    const response = await patched(`${GATEWAY}/chat/completions`, {
+      method: "POST",
+      body: "{}",
+    });
+    assert.equal(response.status, 200);
+    const calls = credentialStub.calls.filter((call) => call.url.includes("chat/completions"));
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].headers.get("authorization"), "Bearer forbidden-retry");
+    assert.equal(
+      credentialStub.calls.filter((call) => call.url.includes("oauth/refresh")).length,
+      1,
+    );
+  } finally {
+    credentialStub.restore();
+  }
+
+  const entitlementStub = stubFetch({
+    statusBody: VALID_STATUS,
+    chatResponses: [{ status: 403, body: JSON.stringify({ message: "quota exhausted" }) }],
+  });
+  try {
+    const plugin = await AtomCodePlugin({}, { autoVersion: false });
+    const { fetch: patched } = await plugin.auth.loader(async () => ({
+      ...AUTH,
+      refresh: "must-not-refresh",
+      expires: Date.now() + 3600_000,
+    }));
+    const response = await patched(`${GATEWAY}/chat/completions`, {
+      method: "POST",
+      body: "{}",
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("x-magpie-sign-in"), "kept");
+    assert.match(await response.text(), /quota/);
+    assert.equal(
+      entitlementStub.calls.filter((call) => call.url.includes("oauth/refresh")).length,
+      0,
+    );
+  } finally {
+    entitlementStub.restore();
+  }
+});
+
+test("usage：重启后网络失败返回磁盘上的 stale 额度而不是清空窗口", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "atomcode-stale-usage-"));
+  const first = stubFetch({ statusBody: VALID_STATUS });
+  try {
+    const plugin = await AtomCodePlugin(
+      { directory },
+      { locale: "en", autoVersion: false },
+    );
+    const value = await plugin.auth.usage(async () => AUTH);
+    assert.equal(value.plan, "CodingPlan Lite-体验版");
+    assert.equal(value.windows.length, 1);
+  } finally {
+    first.restore();
+  }
+
+  const offline = stubFetch({ statusBody: null });
+  try {
+    const plugin = await AtomCodePlugin(
+      { directory },
+      { locale: "en", autoVersion: false },
+    );
+    const stale = await plugin.auth.usage(async () => AUTH);
+    assert.equal(stale.plan, "CodingPlan Lite-体验版");
+    assert.equal(stale.windows.length, 1);
+    assert.equal(stale.stale, true);
+    assert.equal(stale.signIn, "kept");
+    assert.match(stale.error, /last successful snapshot/i);
+    const persisted = await readFile(join(directory, "atomcode-state.json"), "utf8");
+    assert.doesNotMatch(persisted, /"u1"|"tok"|cli@example\.com/);
+  } finally {
+    offline.restore();
+  }
+});
+
+test("provider.models：实时目录失败时重启后使用 last-good 磁盘缓存", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "atomcode-cached-models-"));
+  const catalogBody = [{ display_model_name: "cached-model", context_window: 12345 }];
+  const first = stubFetch({ statusBody: VALID_STATUS, modelsBody: catalogBody });
+  try {
+    const plugin = await AtomCodePlugin(
+      { directory },
+      { autoVersion: false },
+    );
+    const models = await plugin.provider.models({}, { auth: AUTH });
+    assert.equal(models["cached-model"].limit.context, 12345);
+  } finally {
+    first.restore();
+  }
+
+  const offline = stubFetch({ statusBody: null });
+  try {
+    const plugin = await AtomCodePlugin(
+      { directory },
+      { autoVersion: false },
+    );
+    const models = await plugin.provider.models({}, { auth: AUTH });
+    assert.equal(models["cached-model"].api.id, "cached-model");
+    assert.equal(models[Symbol.for("magpie.fellBack")], true);
+  } finally {
+    offline.restore();
+  }
+});
+
+test("usage：额度类 403 不把账号标记为 expired", async () => {
+  const stub = stubFetch({
+    statusBody: { message: "CodingPlan quota exhausted" },
+    statusStatus: 403,
+  });
+  try {
+    const plugin = await AtomCodePlugin({}, { locale: "en", autoVersion: false });
+    const usage = await plugin.auth.usage(async () => ({
+      ...AUTH,
+      refresh: "must-not-refresh",
+      expires: Date.now() + 3600_000,
+    }));
+    assert.notEqual(usage.signIn, "expired");
+    assert.equal(usage.signIn, "kept");
+    assert.equal(stub.calls.filter((call) => call.url.includes("oauth/refresh")).length, 0);
+  } finally {
+    stub.restore();
+  }
 });

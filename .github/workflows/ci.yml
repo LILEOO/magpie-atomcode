@@ -65,4 +65,10 @@ jobs:
           cd "$smoke"
           npm init -y >/dev/null
           npm install --ignore-scripts --no-audit --no-fund "$GITHUB_WORKSPACE/$tarball"
-          node --input-type=module -e "import('@magpie-community/opencode-atomcode-auth').then((m) => { if (typeof m.AtomCodePlugin !== 'function') process.exit(1) })"
+          node --input-type=module -e "
+            const { AtomCodePlugin } = await import('@magpie-community/opencode-atomcode-auth');
+            const hooks = await AtomCodePlugin({}, { autoVersion: false, autoClaim: false });
+            if (typeof AtomCodePlugin !== 'function') process.exit(1);
+            if (hooks.provider?.id !== 'atomcode') process.exit(1);
+            if (hooks.auth?.options?.some((option) => option.default !== true)) process.exit(1);
+          "

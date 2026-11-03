@@ -3,6 +3,56 @@
 All notable changes to this project are documented here. The format follows
 Keep a Changelog and the project uses semantic versioning.
 
+## 0.3.0 - 2026-11-03
+
+### Added
+
+- Magpie-native `auto_claim` and `auto_version` provider switches, both on by
+  default. The legacy `autoClaim` and `autoVersion` options still override them.
+- A loopback-only, read-only diagnostics page at
+  `http://127.0.0.1:3478/` (configurable), with token-gated state and offline
+  signature checks. It never calls AtomGit and is not started under OpenCode.
+- Crash-tolerant state under Magpie's plugin directory for last-good model
+  metadata, quota snapshots, version provenance, redacted errors and self-check
+  results. The file contains no access token, refresh token, full user id,
+  email, prompt or raw upstream response.
+- A custom `auth.toml` path prompt for the AtomCode CLI sign-in method, accepting
+  absolute paths and `~/...`, with renewals written back only to that file.
+- A shared failure vocabulary that separates credential failures from plan,
+  entitlement and quota failures across models, usage and check-in.
+
+### Changed
+
+- Minimum Magpie version is now `0.1.2629`, which provides native provider
+  switches and page services.
+- Usage failures after a successful read now return the persisted stale quota
+  snapshot with `stale: true` instead of replacing the account's windows with
+  an empty result.
+- Live model discovery falls back first to the account's last successful disk
+  cache, then to the built-in snapshot.
+- Only 401 and explicit credential/session 403 responses trigger a refresh.
+  Quota and entitlement 403 responses keep the sign-in and add
+  `x-magpie-sign-in: kept`.
+- Quota rows are separated by explicit unit and window span, so a token window
+  is not misreported as a call-count window.
+
+### Fixed
+
+- Restarting or briefly losing the CodingPlan endpoint no longer hides known
+  quota windows or the previous model catalog.
+- Exhausted claim slots now produce `ineligible`; ordinary upstream failures
+  remain `failed`.
+- A missing native switch value now matches the settings UI's enabled default.
+- The published package uses an explicit file list, so editor backup/upload
+  sidecars cannot enter the npm tarball.
+
+### Security
+
+- Diagnostics bind only to `127.0.0.1`, validate `Host` and `Origin`, require a
+  random per-process token for APIs, and serve a restrictive CSP.
+- Persisted diagnostics state is schema-filtered, atomically written with
+  `0600` permissions, and excludes credentials and account identifiers.
+
 ## 0.2.0 - 2026-11-02
 
 ### Added

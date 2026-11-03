@@ -24,6 +24,7 @@ import {
   readCappedResponseText,
   upstreamMessage,
 } from "./internal.mjs";
+import { classifyError, FAILURE } from "./errors.mjs";
 
 const withBase = (base, path) => `${String(base).replace(/\/+$/, "")}/${path}`;
 
@@ -103,7 +104,9 @@ async function request(
       `CodingPlan returned HTTP ${res.status}${message ? `: ${message}` : ""}`,
     );
     error.status = res.status;
-    if (res.status === 401 || res.status === 403) error.signIn = "expired";
+    const failure = classifyError(error);
+    error.category = failure.category;
+    if (failure.signInExpired) error.signIn = "expired";
     throw error;
   }
   try {
@@ -193,9 +196,18 @@ export async function claimCodingPlan(
         /* 非 JSON 响应体 → message 退回原文 */
       }
     } catch (error) {
+      const failure = classifyError(error);
       attempts.push({ tier, httpStatus: 0, success: false, duplicate: false, message: error.message });
       lastMessage = error.message;
-      return { claimed: false, duplicate: false, tier: "", planName: "", message: lastMessage, attempts };
+      return {
+        claimed: false,
+        duplicate: false,
+        tier: "",
+        planName: "",
+        message: lastMessage,
+        category: failure.category,
+        attempts,
+      };
     }
     const success = status >= 200 && status < 300 && response?.success === true;
     const duplicate = status >= 200 && status < 300 && response?.duplicate === true;
@@ -221,9 +233,30 @@ export async function claimCodingPlan(
     // A transport/auth/rate-limit failure affects every tier. Only an
     // entitlement-shaped rejection is worth cascading to the next tier.
     if (![400, 404, 409, 422].includes(status)) {
-      return { claimed: false, duplicate: false, tier: "", planName: "", message, attempts };
+      const failure = classifyError({ status: status || undefined, message });
+      return {
+        claimed: false,
+        duplicate: false,
+        tier: "",
+        planName: "",
+        message,
+        category: failure.category,
+        attempts,
+      };
     }
     if (message) lastMessage = message;
   }
-  return { claimed: false, duplicate: false, tier: "", planName: "", message: lastMessage, attempts };
+  const failure = classifyError({ message: lastMessage });
+  return {
+    claimed: false,
+    duplicate: false,
+    tier: "",
+    planName: "",
+    message: lastMessage,
+    category:
+      failure.category === FAILURE.UNKNOWN
+        ? FAILURE.INELIGIBLE
+        : failure.category,
+    attempts,
+  };
 }

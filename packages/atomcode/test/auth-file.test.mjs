@@ -8,6 +8,7 @@ import {
   parseAuthFile,
   renderAuthFile,
   readAuthFile,
+  resolveAuthFilePath,
   writeAuthFile,
 } from "../auth-file.mjs";
 
@@ -34,6 +35,32 @@ test("parseAuthFile maps the CLI file without exposing raw text", () => {
   assert.equal(auth.accountId, "alice@example.com");
   assert.equal(auth.name, "Alice");
   assert.equal(auth.expires, 1700003600_000);
+});
+
+test("resolveAuthFilePath expands only the current user's home and absolute paths", () => {
+  const env = { HOME: "/home/alice" };
+  assert.equal(
+    resolveAuthFilePath(undefined, env),
+    "/home/alice/.atomcode/auth.toml",
+  );
+  assert.equal(resolveAuthFilePath("", env), "/home/alice/.atomcode/auth.toml");
+  assert.equal(resolveAuthFilePath("~", env), "/home/alice");
+  assert.equal(
+    resolveAuthFilePath("~/.atomcode/custom.toml", env),
+    "/home/alice/.atomcode/custom.toml",
+  );
+  assert.equal(
+    resolveAuthFilePath("/var/lib/atomcode/auth.toml", env),
+    "/var/lib/atomcode/auth.toml",
+  );
+});
+
+test("resolveAuthFilePath rejects relative, NUL, oversized and other-user paths", () => {
+  const env = { HOME: "/home/alice" };
+  assert.throws(() => resolveAuthFilePath("auth.toml", env), /absolute/);
+  assert.throws(() => resolveAuthFilePath("~bob/auth.toml", env), /another-user/);
+  assert.throws(() => resolveAuthFilePath("~/a\0b", env), /NUL/);
+  assert.throws(() => resolveAuthFilePath(`~/${"a".repeat(4096)}`, env), /too long/);
 });
 
 test("renderAuthFile updates only credential fields and preserves unknown content", () => {

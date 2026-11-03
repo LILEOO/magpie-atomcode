@@ -33,8 +33,10 @@ import {
   fellBack,
   originOf,
   readAuth,
+  readCappedResponseText,
   redactText,
   trustedServiceURL,
+  upstreamMessage,
 } from "./internal.mjs";
 import { MASTER_KEY_HEX, signAtomGitRequest } from "./sign.mjs";
 import {
@@ -57,11 +59,24 @@ import {
 } from "./models.mjs";
 import { fill, resolveLocale, strings as tableFor } from "./i18n.mjs";
 import {
-  defaultAuthFilePath,
   readAuthFile,
+  resolveAuthFilePath,
   writeAuthFile,
 } from "./auth-file.mjs";
 import { includeStreamUsage, normalizeRequestBody } from "./request-body.mjs";
+import {
+  FAILURE,
+  annotateError,
+  classifyError,
+  isCredentialFailure,
+  keptResponseHeaders,
+} from "./errors.mjs";
+import { createStateStore } from "./state.mjs";
+import {
+  DEFAULT_DIAGNOSTICS_PORT,
+  diagnosticsPort,
+  startDiagnosticsService,
+} from "./diagnostics.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const AUTH_REFRESH_SKEW_MS = 30_000;
@@ -70,13 +85,17 @@ const USAGE_BUDGET_MS = 18_000;
 /**
  * Build the plugin.
  *
- * @param {{client?: object}} input - the plugin input the host passes.
+ * @param {{client?: object, directory?: string, magpie?: object}} input -
+ *   the plugin input the Magpie or OpenCode host passes.
  * @param {object} [options] - the `options` field from `plugins.json`:
  *   `locale`, `clientVersion`, `masterKeyHex`, `platformBaseURL`,
- *   `codingPlanAPIURL`, `quotaTtlMs`, `maxOutputTokens`.
+ *   `codingPlanAPIURL`, `quotaTtlMs`, `maxOutputTokens`, `diagnosticsPort`.
  * @returns {Promise<object>} the hooks the host calls.
  */
-export async function AtomCodePlugin({ client } = {}, options = {}) {
+export async function AtomCodePlugin(input = {}, options = {}) {
+  input = input && typeof input === "object" ? input : {};
+  const { client, magpie } = input;
+  const directory = typeof input.directory === "string" ? input.directory : undefined;
   options = options && typeof options === "object" ? options : {};
   const t = tableFor(resolveLocale(options.locale));
 
@@ -118,6 +137,32 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
     warnInvalid("autoClaim", options.autoClaim);
   }
 
+  const nativeBoolean = (key) => {
+    try {
+      const value = magpie?.option?.(PROVIDER, key);
+      return typeof value === "boolean" ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const automationValue = (explicit, nativeKey) =>
+    typeof explicit === "boolean" ? explicit : nativeBoolean(nativeKey) ?? true;
+  const autoClaimEnabled = () => automationValue(options.autoClaim, "auto_claim");
+  const autoVersionEnabled = () => automationValue(options.autoVersion, "auto_version");
+
+  const configuredDiagnosticsPort = options.diagnosticsPort;
+  const selectedDiagnosticsPort = diagnosticsPort(
+    configuredDiagnosticsPort,
+    DEFAULT_DIAGNOSTICS_PORT,
+  );
+  if (
+    configuredDiagnosticsPort !== undefined &&
+    selectedDiagnosticsPort === DEFAULT_DIAGNOSTICS_PORT &&
+    Number(configuredDiagnosticsPort) !== DEFAULT_DIAGNOSTICS_PORT
+  ) {
+    warnInvalid("diagnosticsPort", configuredDiagnosticsPort);
+  }
+
   const opts = {
     clientVersion,
     // 逃生口：上游换 master key 时不发版热修（对齐 Atom2Api 的 signer_url 思路）。
@@ -146,11 +191,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
       32_768,
       1_000_000,
     ),
-    // 官方客户端发新版会强制更新 → 版本新鲜度大概率影响网关放行；默认自动跟随
-    // 官方仓库版本，拉取失败退回 clientVersion，绝不阻塞请求。
-    autoVersion: options.autoVersion !== false,
-    // 登录成功后按 Max→Pro→Lite 幂等领取 CodingPlan（重复领取上游返回 duplicate）。
-    autoClaim: options.autoClaim !== false,
+    diagnosticsPort: selectedDiagnosticsPort,
   };
 
   /**
@@ -176,6 +217,28 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
     );
   }
 
+  const stateStore = createStateStore({
+    directory,
+    onError: (error) =>
+      log(
+        "warn",
+        `${PROVIDER}: ${fill(t.stateWriteFailed, {
+          detail: redactText(error.message),
+        })}`,
+      ),
+  });
+
+  const rememberFailure = (uid, error, context = {}) => {
+    const failure = classifyError(error, context);
+    void stateStore.recordError(uid, {
+      category: failure.category,
+      message: failure.message,
+      status: failure.status,
+      at: Date.now(),
+    });
+    return failure;
+  };
+
   const catalog = createCatalog({
     apiBase: opts.codingPlanAPIURL,
     clientVersion: opts.clientVersion,
@@ -186,13 +249,21 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
   const versionSource = createVersionSource({
     fallback: opts.clientVersion,
     onError: (error) => log("warn", `${PROVIDER}: version check: ${error.message}`),
+    onChange: (status) =>
+      void stateStore.recordVersion({
+        ...status,
+        checkedAt: status.checkedAt,
+      }),
   });
   // 宿主一启动就后台探一次；首个真实请求到达前多半已就位。
-  if (opts.autoVersion) versionSource.poke();
+  if (autoVersionEnabled()) versionSource.poke();
+  void stateStore.recordVersion(versionSource.status());
 
   /** 本次请求用的版本号：UA、X-AtomCode-Ver、签名盐取同一值（绝不抛错）。 */
   const clientVersionNow = () =>
-    opts.autoVersion ? versionSource.ensure() : Promise.resolve(opts.clientVersion);
+    autoVersionEnabled()
+      ? versionSource.ensure()
+      : Promise.resolve(opts.clientVersion);
 
   const seedModels = () =>
     Object.fromEntries(
@@ -201,6 +272,28 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
         return [m.key, toConfigModel(m)];
       }),
     );
+
+  const providerModels = (list) => {
+    const result = Object.create(null);
+    for (const model of list) {
+      let key = model.key;
+      let suffix = 2;
+      while (Object.hasOwn(result, key)) {
+        key = `${model.key}_${suffix++}`;
+      }
+      if (key !== model.key) {
+        log(
+          "warn",
+          `${PROVIDER}: ${fill(t.modelKeyCollision, { detail: model.key, key })}`,
+        );
+      }
+      result[key] = toProviderModel({ ...model, key }, PROVIDER, {
+        baseURL: opts.gatewayURL,
+        npm: NPM,
+      });
+    }
+    return result;
+  };
 
   /** How the provider row names this account. */
   const userLabel = (auth) => {
@@ -224,6 +317,21 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
     });
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   };
+
+  async function classifyGatewayResponse(response) {
+    const base = { status: response?.status, message: "" };
+    if (response?.status !== 403) return classifyError(base);
+    try {
+      const text = await readCappedResponseText(response.clone(), {
+        maxBytes: 16 << 10,
+        label: "gateway error",
+      });
+      base.message = upstreamMessage(text);
+    } catch {
+      /* A non-JSON or oversized error body stays a plain 403. */
+    }
+    return classifyError(base);
+  }
 
   /**
    * Renew one account's token.
@@ -306,7 +414,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
     let saved = false;
     if (raw?.source === "atomcode-cli") {
       try {
-        const path = raw.authFile || defaultAuthFilePath();
+        const path = resolveAuthFilePath(raw.authFile);
         const latest = await readAuthFile(path);
         if (latest.uid !== credentials.uid) {
           throw markExpired(t.cliAccountChanged);
@@ -348,7 +456,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
   async function rereadCliAuth(raw, credentials) {
     if (raw?.source !== "atomcode-cli") return { raw, credentials, changed: false };
     try {
-      const latest = await readAuthFile(raw.authFile || defaultAuthFilePath());
+      const latest = await readAuthFile(resolveAuthFilePath(raw.authFile));
       if (credentials?.uid && latest.uid !== credentials.uid) {
         throw markExpired(t.cliAccountChanged);
       }
@@ -457,7 +565,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
   }
 
   async function ensurePlan(credentials, { status, deadline } = {}) {
-    if (!opts.autoClaim) return false;
+    if (!autoClaimEnabled()) return false;
     try {
       if (!status) {
         const remaining = remainingMs(deadline);
@@ -495,7 +603,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
     }
   }
 
-  return {
+  const hooks = {
     /** Declare the provider and its snapshot models. */
     config: async (cfg) => {
       cfg.provider ??= {};
@@ -521,9 +629,10 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
        */
       async models(provider, { auth } = {}) {
         const declared = provider?.models ?? seedModels();
+        let raw;
         let credentials;
         try {
-          ({ credentials } = await currentCredentials(auth));
+          ({ raw, credentials } = await currentCredentials(auth));
         } catch (error) {
           if (error.signIn === "expired") throw error;
           log(
@@ -557,29 +666,24 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
           }
           if (!list.length) {
             log("warn", `${PROVIDER}: ${t.modelListEmpty}`);
+            const cached = await stateStore.cachedModels(credentials.uid);
+            if (cached.length) return fellBack(providerModels(cached));
             return fellBack(declared);
           }
-          const result = Object.create(null);
-          for (const model of list) {
-            let key = model.key;
-            let suffix = 2;
-            while (Object.hasOwn(result, key)) {
-              key = `${model.key}_${suffix++}`;
-            }
-            if (key !== model.key) {
-              log(
-                "warn",
-                `${PROVIDER}: ${fill(t.modelKeyCollision, { detail: model.key, key })}`,
-              );
-            }
-            result[key] = toProviderModel({ ...model, key }, PROVIDER, {
-              baseURL: opts.gatewayURL,
-              npm: NPM,
-            });
-          }
-          return result;
+          await stateStore.recordModels(credentials.uid, list, { source: "live" });
+          await stateStore.recordLogin(credentials.uid, raw?.source ?? "browser");
+          return providerModels(list);
         } catch (error) {
           if (error.signIn === "expired") throw error;
+          rememberFailure(credentials.uid, error, { stage: "models" });
+          const cached = await stateStore.cachedModels(credentials.uid);
+          if (cached.length) {
+            log(
+              "warn",
+              `${PROVIDER}: ${t.modelsUnavailable}: ${redactText(error.message)}`,
+            );
+            return fellBack(providerModels(cached));
+          }
           log(
             "warn",
             `${PROVIDER}: ${t.modelsUnavailable}: ${redactText(error.message)}`,
@@ -633,7 +737,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
                     });
                     // 签到闭环的最后一步（Atom2Api 登录后同款）：把计划领上。
                     // 幂等（重复领取返回 duplicate），失败只记日志、绝不拦登录。
-                    if (opts.autoClaim) {
+                    if (autoClaimEnabled()) {
                       // Claiming is useful but must never delay a completed
                       // sign-in. A later models/usage call retries idempotently.
                       void (async () => {
@@ -653,6 +757,10 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
                         }
                       })();
                     }
+                    void stateStore.recordLogin(
+                      String(token.user.id),
+                      "atomcode-browser",
+                    );
                     return {
                       type: "success",
                       source: "atomcode-browser",
@@ -682,13 +790,36 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
         {
           type: "oauth",
           label: t.cliMethodLabel,
-          async authorize() {
+          prompts: [
+            {
+              type: "text",
+              key: "authFile",
+              message: t.cliAuthFilePrompt,
+              placeholder: "~/.atomcode/auth.toml",
+              validate: (value) => {
+                try {
+                  resolveAuthFilePath(value);
+                  return undefined;
+                } catch {
+                  return t.cliAuthFileInvalid;
+                }
+              },
+            },
+          ],
+          async authorize(inputs = {}) {
+            let authFile;
+            try {
+              authFile = resolveAuthFilePath(inputs.authFile);
+            } catch {
+              throw new Error(t.cliAuthFileInvalid);
+            }
             return {
               instructions: t.cliInstructions,
               method: "auto",
               async callback() {
                 try {
-                  const auth = await readAuthFile(defaultAuthFilePath());
+                  const auth = await readAuthFile(authFile);
+                  void stateStore.recordLogin(auth.uid, "atomcode-cli");
                   return {
                     type: "success",
                     source: "atomcode-cli",
@@ -709,6 +840,36 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
                 }
               },
             };
+          },
+        },
+      ],
+
+      /**
+       * Magpie's native provider switches. Explicit legacy `options`
+       * (`autoClaim`/`autoVersion`) win for compatibility; otherwise these
+       * values are read live from `input.magpie.option`.
+       */
+      options: [
+        {
+          key: "auto_claim",
+          label: t.autoClaimLabel,
+          description: t.autoClaimDescription,
+          default: true,
+          labels: { zh: "自动领取套餐", en: "Claim plans automatically" },
+          descriptions: {
+            zh: "登录后幂等领取 CodingPlan，并在套餐到期时自动重领。",
+            en: "Idempotently claim CodingPlan after sign-in and re-claim it when the plan expires.",
+          },
+        },
+        {
+          key: "auto_version",
+          label: t.autoVersionLabel,
+          description: t.autoVersionDescription,
+          default: true,
+          labels: { zh: "自动跟随客户端版本", en: "Follow the client version" },
+          descriptions: {
+            zh: "从 AtomCode 官方仓库后台刷新版本号，用于签名与 User-Agent。",
+            en: "Refresh the version from AtomCode's official repository in the background for signing and User-Agent.",
           },
         },
       ],
@@ -843,9 +1004,16 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
               return fetch(targetString, forwarded);
             };
 
-            let response = await dispatch(credentials, normalized);
+            let response;
+            try {
+              response = await dispatch(credentials, normalized);
+            } catch (error) {
+              rememberFailure(credentials.uid, error, { stage: "gateway" });
+              throw annotateError(error, { stage: "gateway" });
+            }
+            let failure = await classifyGatewayResponse(response);
             if (
-              (response.status === 401 || response.status === 403) &&
+              (response.status === 401 || failure.refresh) &&
               !state.renewed &&
               credentials.refresh
             ) {
@@ -855,6 +1023,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
                   await response.body?.cancel().catch(() => {});
                   credentials = retry.credentials;
                   response = await dispatch(credentials, normalized);
+                  failure = await classifyGatewayResponse(response);
                 }
               } catch (error) {
                 if (error.signIn === "expired") throw markExpired();
@@ -864,7 +1033,20 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
                 );
               }
             }
-            return response;
+            if (
+              [401, 403, 429].includes(response.status) ||
+              response.status >= 500
+            ) {
+              rememberFailure(
+                credentials.uid,
+                Object.assign(new Error(failure.message || `HTTP ${response.status}`), {
+                  status: response.status,
+                  category: failure.category,
+                }),
+                { stage: "gateway" },
+              );
+            }
+            return keptResponseHeaders(response, failure);
           },
         };
       },
@@ -908,10 +1090,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
           try {
             status = await readStatus(credentials, 7_000);
           } catch (error) {
-            if (
-              (error.status !== 401 && error.status !== 403) ||
-              !credentials.refresh
-            ) {
+            if (!isCredentialFailure(error) || !credentials.refresh) {
               throw error;
             }
             const retry = await currentCredentials(raw, { forceRefresh: true, deadline });
@@ -931,19 +1110,30 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
           }
           const value = quotaFromStatus(status, t, { user });
           quotaCache.set(cacheKey, { at: Date.now(), value });
+          await stateStore.recordQuota(credentials.uid, value);
+          await stateStore.recordLogin(credentials.uid, raw?.source ?? "browser");
           return value;
         } catch (error) {
-          const expired = error.signIn === "expired";
+          const failure = classifyError(error, { stage: "usage" });
+          const expired = error.signIn === "expired" || failure.signInExpired;
+          const uid = credentials?.uid ?? raw?.uid;
+          rememberFailure(uid, error, { stage: "usage" });
+          const stale = expired ? undefined : await stateStore.cachedQuota(uid);
+          const detail = redactText(error.message);
           const value = {
-            plan: t.planFallback,
+            ...(stale ?? {}),
+            plan: stale?.plan ?? t.planFallback,
             ...(user ? { user } : {}),
             error: expired
               ? t.reloginRequired
+              : stale
+                ? fill(t.usageStale, { detail })
               : error.status
                 ? fill(t.usageHttp, { status: error.status })
-                : fill(t.readFailed, { detail: redactText(error.message) }),
-            ...(expired ? { signIn: "expired" } : {}),
-            windows: [],
+                : fill(t.readFailed, { detail }),
+            signIn: expired ? "expired" : "kept",
+            ...(stale ? { stale: true } : {}),
+            windows: stale?.windows ?? [],
           };
           quotaCache.set(cacheKey, { at: Date.now() - opts.quotaTtlMs + 15_000, value });
           log("warn", `${PROVIDER}: usage: ${redactText(error.message)}`);
@@ -999,10 +1189,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
           try {
             status = await readStatus();
           } catch (error) {
-            if (
-              (error.status !== 401 && error.status !== 403) ||
-              !credentials.refresh
-            ) {
+            if (!isCredentialFailure(error) || !credentials.refresh) {
               throw error;
             }
             const retry = await currentCredentials(state.raw, {
@@ -1033,6 +1220,18 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
           const claim = await claimOnce(credentials, { deadline });
           if (!claim) return { outcome: "failed", message: t.usageTimeout };
           if (!claim.claimed) {
+            const category =
+              claim.category ??
+              classifyError({ message: claim.message }).category;
+            if (
+              category === FAILURE.INELIGIBLE ||
+              category === FAILURE.ENTITLEMENT_FORBIDDEN
+            ) {
+              return {
+                outcome: "ineligible",
+                message: redactText(claim.message) || t.checkinIneligible,
+              };
+            }
             return {
               outcome: "failed",
               message:
@@ -1075,4 +1274,50 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
       },
     },
   };
+
+  if (magpie) {
+    try {
+      const diagnostics = startDiagnosticsService({
+        port: opts.diagnosticsPort,
+        stateStore,
+        versionSource,
+        locale: t.locale,
+        config: {
+          locale: t.locale,
+          autoClaim: autoClaimEnabled,
+          autoVersion: autoVersionEnabled,
+          diagnosticsPort: opts.diagnosticsPort,
+        },
+        selfCheckConfig: {
+          clientVersion: opts.clientVersion,
+          masterKeyHex: opts.masterKeyHex,
+        },
+      });
+      diagnostics.ready.then(
+        () =>
+          log(
+            "info",
+            `${PROVIDER}: ${fill(t.diagnosticsStarted, {
+              port: opts.diagnosticsPort,
+            })}`,
+          ),
+        (error) =>
+          log(
+            "warn",
+            `${PROVIDER}: ${fill(t.diagnosticsFailed, {
+              detail: redactText(error.message),
+            })}`,
+          ),
+      );
+    } catch (error) {
+      log(
+        "warn",
+        `${PROVIDER}: ${fill(t.diagnosticsFailed, {
+          detail: redactText(error.message),
+        })}`,
+      );
+    }
+  }
+
+  return hooks;
 }

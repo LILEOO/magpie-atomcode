@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="{{LOCALE}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="atomcode-token" content="{{TOKEN}}">
+  <title>AtomCode diagnostics</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+  <main class="shell">
+    <header class="masthead">
+      <div class="brand">
+        <img src="/icon.svg" alt="" width="44" height="44">
+        <div>
+          <p class="eyebrow" data-i18n="eyebrow">MAGPIE PROVIDER / OFFLINE VIEW</p>
+          <h1>AtomCode</h1>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="refresh" type="button" data-i18n="refresh">Refresh</button>
+        <button id="self-check" type="button" class="primary" data-i18n="selfCheck">Run offline self-check</button>
+      </div>
+    </header>
+
+    <p id="status" class="status" role="status" aria-live="polite" data-i18n="loading">Loading local snapshot…</p>
+
+    <section class="grid" aria-label="Diagnostics">
+      <article class="card accent">
+        <p class="label" data-i18n="account">Account</p>
+        <strong id="account">—</strong>
+        <span id="login-source" class="detail"></span>
+      </article>
+      <article class="card">
+        <p class="label" data-i18n="models">Models</p>
+        <strong id="model-source">—</strong>
+        <span id="model-detail" class="detail"></span>
+      </article>
+      <article class="card">
+        <p class="label" data-i18n="quota">Quota snapshot</p>
+        <strong id="quota-plan">—</strong>
+        <span id="quota-detail" class="detail"></span>
+      </article>
+      <article class="card">
+        <p class="label" data-i18n="version">Version source</p>
+        <strong id="version">—</strong>
+        <span id="version-detail" class="detail"></span>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow" data-i18n="quotaReadout">QUOTA WINDOWS</p>
+          <h2 data-i18n="snapshot">Persisted snapshot</h2>
+        </div>
+        <span id="stale-badge" class="badge" hidden data-i18n="stale">STALE</span>
+      </div>
+      <ul id="windows" class="windows"></ul>
+      <p id="quota-empty" class="empty" data-i18n="noQuota">No successful quota snapshot has been recorded yet.</p>
+    </section>
+
+    <section class="split">
+      <article class="panel">
+        <p class="eyebrow" data-i18n="selfCheckTitle">SELF-CHECK</p>
+        <h2 data-i18n="signature">Offline signature</h2>
+        <p id="self-check-result" class="result" data-i18n="notRun">Not run in this session.</p>
+      </article>
+      <article class="panel">
+        <p class="eyebrow" data-i18n="errorTitle">LAST ERROR</p>
+        <h2 data-i18n="redacted">Redacted</h2>
+        <p id="last-error" class="result" data-i18n="noError">No error has been recorded.</p>
+      </article>
+    </section>
+
+    <footer>
+      <p data-i18n="privacy">Read-only. No request is sent to AtomGit from this page. Tokens, emails, prompts and raw responses are never included.</p>
+      <button id="copy" type="button" data-i18n="copy">Copy redacted report</button>
+    </footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

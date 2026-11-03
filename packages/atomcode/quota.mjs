@@ -55,6 +55,85 @@ function tokenWindow(usage, hours, reset, t) {
   };
 }
 
+function tokenValues(raw) {
+  return {
+    amount: num(
+      raw?.window_tokens_used ??
+        raw?.tokens_used ??
+        raw?.token_count_used ??
+        raw?.tokens ??
+        raw?.used_tokens,
+    ),
+    limit: num(
+      raw?.window_token_limit ??
+        raw?.token_limit ??
+        raw?.token_count_limit ??
+        raw?.tokens_limit ??
+        raw?.limit_tokens,
+    ),
+    used: num(raw?.token_usage_percent ?? raw?.tokens_usage_percent),
+  };
+}
+
+function callValues(raw) {
+  return {
+    amount: num(raw?.calls_used ?? raw?.requests_used ?? raw?.request_count_used),
+    limit: num(raw?.call_limit ?? raw?.requests_limit ?? raw?.request_count_limit),
+    used: num(raw?.call_usage_percent ?? raw?.requests_usage_percent),
+  };
+}
+
+function rawUnit(raw) {
+  const value = String(raw?.unit ?? raw?.quota_unit ?? raw?.limit_type ?? raw?.resource ?? "")
+    .toLowerCase();
+  if (/token|词元/.test(value)) return "tokens";
+  if (/call|request|次/.test(value)) return "calls";
+  return undefined;
+}
+
+function spanOf(raw) {
+  const span = num(raw?.window_size_seconds) ?? (num(raw?.window_hours) ?? 5) * 3600;
+  const hours = num(raw?.window_hours) ?? Math.max(1, Math.round(span / 3600));
+  return { span, hours };
+}
+
+function rawTokenWindow(raw, t, usage) {
+  const { amount, limit, used: declaredUsed } = tokenValues(raw);
+  if (amount === undefined && limit === undefined && declaredUsed === undefined) return undefined;
+  const { span, hours } = spanOf(raw);
+  const used = declaredUsed ?? pctOf(amount, limit);
+  return {
+    name: fill(t.windowTokens, { hours }),
+    ...(used !== undefined ? { used } : {}),
+    span,
+    ...(amount !== undefined ? { amount } : {}),
+    unit: "tokens",
+    ...(limit ? { limit } : {}),
+    ...(limit && amount !== undefined
+      ? { display: fill(t.tokensOf, { used: amount, total: limit }) }
+      : {}),
+    ...resetOf(raw, usage),
+  };
+}
+
+function rawCallWindow(raw, t, usage) {
+  const { amount, limit, used: declaredUsed } = callValues(raw);
+  const { span, hours } = spanOf(raw);
+  const used = declaredUsed ?? num(raw?.usage_percent) ?? pctOf(amount, limit);
+  return {
+    name: fill(t.windowHours, { hours }),
+    ...(used !== undefined ? { used } : {}),
+    span,
+    ...(amount !== undefined ? { amount } : {}),
+    unit: "calls",
+    ...(limit ? { limit } : {}),
+    ...(limit && amount !== undefined
+      ? { display: fill(t.callsOf, { used: amount, total: limit }) }
+      : {}),
+    ...resetOf(raw, usage),
+  };
+}
+
 /**
  * Build the `auth.usage` payload from a `status-v2` response.
  *
@@ -77,43 +156,53 @@ export function quotaFromStatus(status, t, { user } = {}) {
     resetOf(usage),
     t,
   );
+  const seen = new Set();
+  const addWindow = (window) => {
+    seen.add(`${window.unit}:${window.span}`);
+    windows.push(window);
+  };
   for (const raw of rawWindows) {
-    const limit = num(raw.call_limit);
-    const amount = num(raw.calls_used);
-    const span = num(raw.window_size_seconds) ?? (num(raw.window_hours) ?? 5) * 3600;
-    const hours = num(raw.window_hours) ?? Math.round(span / 3600);
-    const used = num(raw.usage_percent) ?? pctOf(amount, limit);
-    windows.push({
-      name: fill(t.windowHours, { hours }),
-      ...(used !== undefined ? { used } : {}),
-      span,
-      ...(amount !== undefined ? { amount } : {}),
-      unit: "calls",
-      ...(limit ? { limit } : {}),
-      ...(limit && amount !== undefined
-        ? { display: fill(t.callsOf, { used: amount, total: limit }) }
-        : {}),
-      ...resetOf(raw, usage),
-    });
+    const unit = rawUnit(raw);
+    const tokens = tokenValues(raw);
+    const hasToken =
+      unit === "tokens" ||
+      tokens.amount !== undefined ||
+      tokens.limit !== undefined ||
+      tokens.used !== undefined;
+    const hasCall = !hasToken;
+    if (hasToken) {
+      const window = rawTokenWindow(raw, t, usage);
+      const { span, hours } = spanOf(raw);
+      addWindow(window ?? {
+        name: fill(t.windowTokens, { hours }),
+        span,
+        unit: "tokens",
+        ...resetOf(raw, usage),
+      });
+    }
+    if (hasCall) {
+      addWindow(rawCallWindow(raw, t, usage));
+    }
   }
+  const currentHours = num(usage.window_hours) ?? 5;
+  const currentSpan = currentHours * 3600;
   if (
-    !rawWindows.length &&
-    !token &&
-    (num(usage.usage_percent) !== undefined || num(usage.window_hours) !== undefined)
+    !seen.has(`calls:${currentSpan}`) &&
+    (num(usage.usage_percent) !== undefined ||
+      (!token && num(usage.window_hours) !== undefined))
   ) {
     // No window row (older shape?): fall back to the current_usage block.
-    const hours = num(usage.window_hours) ?? 5;
     const used = num(usage.usage_percent);
-    windows.push({
-      name: fill(t.windowHours, { hours }),
+    addWindow({
+      name: fill(t.windowHours, { hours: currentHours }),
       ...(used !== undefined ? { used } : {}),
-      span: hours * 3600,
+      span: currentSpan,
       unit: "calls",
       ...resetOf(usage),
     });
   }
-  if (token && !rawWindows.some((raw) => num(raw.window_tokens_used ?? raw.tokens_used) !== undefined)) {
-    windows.push(token);
+  if (token && !seen.has(`tokens:${token.span}`)) {
+    addWindow(token);
   }
 
   return {

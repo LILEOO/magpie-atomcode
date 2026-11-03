@@ -122,6 +122,21 @@ test("poke：后台拉取完成后 get() 升级（宿主常驻场景）", async 
   assert.equal(src.get(), "6.0.0");
 });
 
+test("版本源报告来源并通过 onChange 通知持久化观察者", async () => {
+  const changes = [];
+  const src = createVersionSource({
+    fallback: "5.2.3",
+    fetchImpl: async () => new Response('[workspace.package]\nversion = "6.2.0"\n'),
+    onChange: (status) => changes.push(status),
+  });
+  assert.equal(src.status().source, "fallback");
+  src.poke();
+  await waitFor(() => src.get() === "6.2.0");
+  assert.equal(src.status().source, "manifest");
+  assert.equal(changes.at(-1).version, "6.2.0");
+  assert.equal(changes.at(-1).live, true);
+});
+
 async function waitFor(predicate, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {

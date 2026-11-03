@@ -31,8 +31,14 @@ https://llm-api.atomgit.com/v1（OpenAI 兼容，SSE 原样流回）
 - **每日签到（checkin）**：magpie 原生签到开关调度。套餐有效 → done；到期/缺失 → 按官方 Max→Pro→Lite 级联自动重领；名额满 → failed 并显示上游原因。
 - **额度窗口**：显示套餐名、到期时间、上游返回的每个限流窗口，并在上游提供
   token 口径时一并显示。
+- **原生开关**：`auto_claim` / `auto_version` 会出现在 Magpie 供应商设置里，
+  默认开启；旧的 camelCase 选项仍可覆盖它们，保持兼容。
+- **重启后可恢复**：最近一次成功的模型目录与额度快照会落盘。临时刷新失败时
+  显示带 `stale` 标记的旧额度，而不是把账号行清空。
 - **自动追版本**：默认跟随 AtomCode 官方仓库的最新版本号（官方客户端会强制更新），拉取失败退回内置版本，绝不阻塞请求。
 - **模型目录动态拉取**：每个账号自己的目录（随套餐/档位而变），离线时用内置快照兜底。
+- **离线诊断页**：`http://127.0.0.1:3478/` 只读展示脱敏后的账号、模型、额度、
+  版本与最近错误，并提供不访问上游的签名自检。
 
 ## 当前模型（2026-11-02 实测快照）
 
@@ -53,7 +59,7 @@ magpie plugin add /path/to/magpie-atomcode/packages/atomcode
 magpie plugin add npm:@magpie-community/opencode-atomcode-auth
 ```
 
-包面向 magpie `>=0.1.2563`。仓库目录已经对齐
+包面向 magpie `>=0.1.2629`。仓库目录已经对齐
 `magpie-community/plugins/packages/atomcode`，可直接迁移。OpenCode 保持可加载，
 但真实 OpenCode 宿主契约尚未验证，因此暂标为实验性。
 
@@ -66,6 +72,8 @@ magpie plugin login atomcode 2   # 复用本机 AtomCode CLI 登录
 
 - CLI 复用会读取 `~/.atomcode/auth.toml`，只接受权限不宽于 `0600` 的普通文件，
   拒绝符号链接；续期后原子回写，让官方 CLI 与 magpie 保持同一条 refresh 链。
+- 第二种登录方式会询问可选的 `auth.toml` 路径。留空使用默认路径，也可以填
+  绝对路径或 `~/...`；相对路径与 `~其他用户` 会被拒绝。
 - 该文件是 CLI 与插件共享状态。如果本机登录切换了账号，需要重新登录 magpie，
   避免用一个账号的 `uid` 给另一个账号的 access token 签名。
 - 签到：magpie 设置 → 插件里的签到开关（「每天让 ATOMCODE 插件给每个已登录的账号签到一次」）。即使不开，套餐到期后额度/目录读取时也会自动补领（30 分钟冷却）。
@@ -76,14 +84,22 @@ magpie plugin login atomcode 2   # 复用本机 AtomCode CLI 登录
 | 选项 | 默认 | 说明 |
 |---|---|---|
 | `locale` | auto（跟机器） | `zh` / `en` |
-| `autoVersion` | `true` | 自动跟随 AtomCode 官方仓库的最新版本号 |
+| `autoVersion` | `true` | 原生 `auto_version` 开关的旧版覆盖项 |
 | `clientVersion` | `5.2.3` | 兜底版本号（`autoVersion` 拉取失败或关闭时用） |
-| `autoClaim` | `true` | 登录后幂等领取 + 到期自动重领（关闭后只剩手动签到） |
+| `autoClaim` | `true` | 原生 `auto_claim` 开关的旧版覆盖项 |
 | `masterKeyHex` | 内置 | 上游更换签名密钥时的热修逃生口（64 位 hex） |
 | `platformBaseURL` | `https://acs.atomgit.com` | OAuth broker 地址 |
 | `codingPlanAPIURL` | `https://api.gitcode.com/api/v5` | CodingPlan REST 地址 |
 | `quotaTtlMs` | `60000` | 额度缓存时长 |
 | `maxOutputTokens` | `32768` | 模型 output 上限兜底 |
+| `diagnosticsPort` | `3478` | 本机诊断端口（`1024..65535`） |
+
+日常建议使用原生开关，它们默认开启；可在供应商编辑器切换，或执行：
+
+```bash
+magpie plugin options atomcode '{"auto_claim":false}'
+magpie plugin options atomcode '{"auto_version":false}'
+```
 
 ## 安全边界
 
@@ -104,10 +120,20 @@ magpie plugin login atomcode 2   # 复用本机 AtomCode CLI 登录
   `stream_options.include_usage`，插件会补 `include_usage: true`，序列化后再签名。
 - **日志脱敏。** 上游响应正文不会塞进异常；非法配置值、bearer、邮箱和长密钥
   不进入日志。
+- **凭证失败与权益失败分开。** 401 或明确属于凭证/会话的 403 才允许触发一次
+  续期；额度、套餐、权限等非凭证 403 不会让账号掉登录，并返回
+  `x-magpie-sign-in: kept`。
+- **诊断页只在本机、只读。** 服务只监听 `127.0.0.1`，校验 `Host`，API 需要
+  每次进程启动时随机生成的令牌，POST 还校验 `Origin`，并下发严格 CSP。页面
+  不会主动请求 AtomGit 或 LLM 网关。
 
 浏览器凭证存在 magpie 自己的 `plugin-auth.json`。CLI 凭证保留在
 `~/.atomcode/auth.toml`，续期时以 `0600` 权限原子替换并保留无关内容。凭证不会
 被打印或写入日志，只会附加到上面两个精确官方主机。
+
+Magpie 还会在 `<插件数据目录>/atomcode-state.json` 保存诊断状态。文件经过
+schema 过滤，以 `0600` 权限原子写入；只包含模型名、额度窗口、版本来源与脱敏
+后的最近错误，不保存 token、完整 user id、邮箱、提示词或上游原始响应。
 
 ### 装完就在跑的默认行为
 
@@ -115,16 +141,17 @@ magpie plugin login atomcode 2   # 复用本机 AtomCode CLI 登录
 
 | 默认 | 实际动作 | 关闭方式 |
 |---|---|---|
-| `autoClaim: true` | 登录后在后台启动 CodingPlan `claim-v2`；套餐到期时再执行幂等重领 | `magpie plugin options atomcode '{"autoClaim":false}'` |
-| `autoVersion: true` | 后台刷新 `raw.atomgit.com` 的版本清单（缓存 12 小时）。请求立即使用当前缓存版本，拿不到时使用内置兜底 | `magpie plugin options atomcode '{"autoVersion":false}'` |
+| `auto_claim: true` | 登录后在后台启动 CodingPlan `claim-v2`；套餐到期时再执行幂等重领 | `magpie plugin options atomcode '{"auto_claim":false}'` |
+| `auto_version: true` | 后台刷新 `raw.atomgit.com` 的版本清单（缓存 12 小时）。请求立即使用当前缓存版本，拿不到时使用内置兜底 | `magpie plugin options atomcode '{"auto_version":false}'` |
 
 ## 排障
 
 登录或 `provider test` 遇到 401 时：
 
 1. 运行 `magpie version`，确认失败阶段是 OAuth 回调、模型目录、额度还是真实对话请求。
-2. 用同一账号运行官方 AtomCode 客户端的 `atomcode login`。若官方客户端也返回 401，更可能是上游账号风控，而不是插件。
-3. 提交 Bug 时附上脱敏日志。不要提供 access token、refresh token、OAuth state、`plugin-auth.json`、邮箱、账号 ID 或未脱敏的用户目录。
+2. 打开插件的 **AtomCode 诊断**页。它会显示持久化的模型来源、旧额度标记、版本来源、脱敏后的最近错误与离线签名自检，不会请求上游。
+3. 用同一账号运行官方 AtomCode 客户端的 `atomcode login`。若官方客户端也返回 401，更可能是上游账号风控，而不是插件。
+4. 提交 Bug 时附上诊断页生成的脱敏报告。不要提供 access token、refresh token、OAuth state、`plugin-auth.json`、邮箱、账号 ID 或未脱敏的用户目录。
 
 安全问题请按 [SECURITY.md](SECURITY.md) 私密报告；开发与审查约定见仓库的 [CONTRIBUTING.md](https://github.com/aqiu817/magpie-atomcode/blob/main/CONTRIBUTING.md)。
 
@@ -159,14 +186,14 @@ PLUGIN_ROOT="$(pwd)/packages/atomcode"
 sb() { env HOME="$SB" USERPROFILE="$SB" XDG_CONFIG_HOME="$SB/.config" XDG_CACHE_HOME="$SB/.cache" \
   MAGPIE_ADDR=127.0.0.1:3499 MAGPIE_PLUGIN_MARKET=off magpie "$@"; }
 sb plugin add "$PLUGIN_ROOT"
-sb provider test atomcode
-sb quota
+sb plugin list
+sb plugin options atomcode
 ```
 
 同一份代码可加载为 OpenCode 插件（v1 插件形态）；magpie 自有的 `auth.usage` /
 `auth.refresh` / `auth.checkin` 会被 OpenCode 忽略。由于 OpenCode 的 OAuth 类型
 没有声明 AtomCode 签名必需的 `uid` 字段，OpenCode 支持仍标为实验性，需通过真实
-宿主契约测试后再升级。
+宿主契约测试后再升级。诊断服务和原生供应商开关仅适用于 Magpie。
 
 ## 免责声明与署名
 

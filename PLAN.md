@@ -1,7 +1,7 @@
 # magpie-atomcode 插件制作规划
 
-- 版本：v1.7（2026-11-03）
-- 状态：**可靠性加固与 workspace 迁移完成**——源码位于 `packages/atomcode`，发布包名 `@magpie-community/opencode-atomcode-auth` 0.2.0；127/127 单测通过，行/分支/函数覆盖率 93.48% / 80.91% / 91.61%；Magpie 0.1.2629 沙箱及真实端点 smoke 通过。剩余外部动作：提交、npm 首次发布与社区 registry 接入
+- 版本：v1.8（2026-11-03）
+- 状态：**0.3.0 可靠性升级完成**——源码位于 `packages/atomcode`，发布包名 `@magpie-community/opencode-atomcode-auth` 0.3.0；155/155 单测通过，覆盖率门禁通过；Magpie 0.1.2817 沙箱加载、原生开关与诊断页通过，兼容下限 `>=0.1.2629`。剩余外部动作：提交、npm 首次发布与社区 registry 接入
 - 目标产物：magpie 供应商插件 —— 让所有 Agent 通过 magpie 使用 AtomCode（AtomGit CodingPlan）的模型，写作 `atomcode/<模型>`
 
 > 本文保留最初的产品与协议调研过程；当前实现、选项、安全边界和验证结果以
@@ -151,14 +151,17 @@ plugin login atomcode（或应用里点登录）
 ### 4.3 插件选项（`plugins.json` 的 options，但都带默认值）
 ```
 locale: "zh" | "en"            # i18n，默认 zh
-autoVersion: true              # 自动跟随 AtomCode 官方仓库版本（决策 ⑤）
+auto_version: true             # Magpie 原生开关：自动跟随官方版本（默认开）
+autoVersion: true              # 旧版覆盖项，优先级高于 auto_version
 clientVersion: "5.2.3"         # 兜底版本号：autoVersion 拉取失败或关闭时用
-autoClaim: true                # 登录成功后幂等领取 CodingPlan（决策 ⑥）
+auto_claim: true               # Magpie 原生开关：登录后幂等领取（默认开）
+autoClaim: true                # 旧版覆盖项，优先级高于 auto_claim
 masterKeyHex: "<32B hex>"       # 逃生口：上游换密钥时热更新（对齐 Atom2Api 的 signer_url 思路）
 platformBaseURL                 # 默认 https://acs.atomgit.com（测试/镜像用）
 codingPlanAPIURL                # 默认 https://api.gitcode.com/api/v5（测试/镜像用）
 quotaTtlMs: 60000               # 额度缓存
 maxOutputTokens: 32768          # 模型 output limit 默认值
+diagnosticsPort: 3478           # 仅 127.0.0.1 的只读诊断服务
 ```
 
 ---

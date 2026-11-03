@@ -11,7 +11,7 @@
 
 import { chmod, lstat, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 import { randomBytes } from "node:crypto";
 
 const ROOT_KEYS = new Set(["access_token", "refresh_token", "created_at", "expires_in"]);
@@ -20,6 +20,40 @@ const USER_KEYS = new Set(["id", "username", "name", "email", "avatar_url"]);
 export function defaultAuthFilePath(env = process.env) {
   const home = env.HOME || env.USERPROFILE || homedir();
   return join(home, ".atomcode", "auth.toml");
+}
+
+/**
+ * Resolve a user-supplied CLI auth path.
+ *
+ * Empty means the default. Only `~`, `~/...` and absolute paths are accepted;
+ * relative paths and `~other-user` would make the account source depend on the
+ * host's working directory, so they are rejected.
+ *
+ * @param {unknown} value
+ * @param {object} [env]
+ * @returns {string}
+ */
+export function resolveAuthFilePath(value, env = process.env) {
+  const raw = value === undefined || value === null ? "" : String(value).trim();
+  if (!raw) return defaultAuthFilePath(env);
+  if (raw.includes("\0")) throw new Error("AtomCode auth file path contains a NUL byte");
+  if (raw.length > 4096) throw new Error("AtomCode auth file path is too long");
+
+  const home = env.HOME || env.USERPROFILE || homedir();
+  let resolved;
+  if (raw === "~") {
+    resolved = home;
+  } else if (raw.startsWith("~/") || raw.startsWith("~\\")) {
+    resolved = join(home, raw.slice(2));
+  } else if (raw.startsWith("~")) {
+    throw new Error("AtomCode auth file path must not use ~another-user");
+  } else if (isAbsolute(raw)) {
+    resolved = normalize(raw);
+  } else {
+    throw new Error("AtomCode auth file path must be absolute or start with ~/");
+  }
+  if (resolved.length > 4096) throw new Error("AtomCode auth file path is too long");
+  return resolved;
 }
 
 function scalar(raw) {

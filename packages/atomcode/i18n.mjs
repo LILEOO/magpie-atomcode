@@ -17,7 +17,9 @@ const ZH = {
   methodLabel: "AtomGit 登录（浏览器）",
   instructions: "浏览器将打开 AtomGit 登录页完成授权；授权完成后回到这里等待，登录会自动完成。",
   cliMethodLabel: "使用本机 AtomCode 登录",
-  cliInstructions: "请先运行 AtomCode CLI 完成登录，再回到这里继续；插件会读取 ~/.atomcode/auth.toml 并安全地复用、续期该登录。",
+  cliInstructions: "请先运行 AtomCode CLI 完成登录，再回到这里继续；插件会读取指定路径（默认 ~/.atomcode/auth.toml）并安全地复用、续期该登录。",
+  cliAuthFilePrompt: "AtomCode auth.toml 路径（留空使用默认路径）",
+  cliAuthFileInvalid: "auth.toml 路径必须是绝对路径或以 ~/ 开头",
   cliLoginFailed: "没有读到可用的 AtomCode CLI 登录：{detail}",
   cliAccountChanged: "本机 AtomCode 登录已切换账号，请在 magpie 中重新登录",
   loginTimeout: "登录超时（浏览器授权没有在 9 分钟内完成），请重试",
@@ -30,6 +32,7 @@ const ZH = {
   authFileReadFailed: "读取 AtomCode CLI 登录失败：{detail}",
   authFileWriteFailed: "回写 AtomCode CLI 登录失败：{detail}",
   authPersistFailed: "magpie 保存续期后的登录失败：{detail}",
+  stateWriteFailed: "保存 AtomCode 本地诊断状态失败：{detail}",
   cannotSign: "账号信息缺少 user id，无法生成请求签名，请重新登录",
   noAccount: "没有已登录的 AtomCode 账号",
   planFallback: "AtomCode CodingPlan",
@@ -37,10 +40,12 @@ const ZH = {
   reclaimFailed: "自动重领未成功：{detail}",
   checkinDone: "套餐仍有效，无需重领",
   checkinDoneWithPlan: "套餐仍有效，无需重领（{plan}）",
+  checkinIneligible: "当前没有可用套餐名额，请稍后重试",
 
 
   usageHttp: "读取额度失败 HTTP {status}",
   readFailed: "读取额度失败：{detail}",
+  usageStale: "额度刷新失败，显示上次成功快照：{detail}",
   usageTimeout: "读取额度超时，请稍后重试",
 
   windowHours: "{hours} 小时额度",
@@ -56,6 +61,12 @@ const ZH = {
   endpointDenied: "配置项 {name} 的地址不被接受，已改用官方端点",
   optionInvalid: "配置项 {name} 的值无效，已改用默认值",
   foreignTargetBlocked: "已拦截请求：目标 {origin} 不是 AtomCode 官方网关",
+  diagnosticsStarted: "只读诊断页已启动：http://127.0.0.1:{port}/",
+  diagnosticsFailed: "只读诊断页启动失败：{detail}",
+  autoClaimLabel: "自动领取套餐",
+  autoClaimDescription: "登录后幂等领取 CodingPlan，并在套餐到期时自动重领。",
+  autoVersionLabel: "自动跟随客户端版本",
+  autoVersionDescription: "从 AtomCode 官方仓库后台刷新版本号，用于签名与 User-Agent。",
 };
 
 const EN = {
@@ -64,7 +75,9 @@ const EN = {
   methodLabel: "AtomGit Sign-in (browser)",
   instructions: "Your browser will open the AtomGit sign-in page; after authorizing, come back here and the sign-in completes by itself.",
   cliMethodLabel: "Use the AtomCode CLI sign-in on this computer",
-  cliInstructions: "Sign in with the AtomCode CLI first, then continue here. The plugin reads ~/.atomcode/auth.toml and safely reuses and renews that sign-in.",
+  cliInstructions: "Sign in with the AtomCode CLI first, then continue here. The plugin reads the selected path (default ~/.atomcode/auth.toml) and safely reuses and renews that sign-in.",
+  cliAuthFilePrompt: "AtomCode auth.toml path (leave blank for the default)",
+  cliAuthFileInvalid: "The auth.toml path must be absolute or start with ~/",
   cliLoginFailed: "No usable AtomCode CLI sign-in was found: {detail}",
   cliAccountChanged: "The local AtomCode CLI sign-in changed accounts; sign in again in magpie",
   loginTimeout: "Timed out (browser authorization not finished within 9 minutes); please retry",
@@ -77,6 +90,7 @@ const EN = {
   authFileReadFailed: "Reading the AtomCode CLI sign-in failed: {detail}",
   authFileWriteFailed: "Writing the renewed AtomCode CLI sign-in failed: {detail}",
   authPersistFailed: "magpie failed to save the renewed sign-in: {detail}",
+  stateWriteFailed: "Saving AtomCode diagnostics state failed: {detail}",
   cannotSign: "The stored account lacks its user id, so requests cannot be signed; please sign in again",
   noAccount: "No signed-in AtomCode account",
   planFallback: "AtomCode CodingPlan",
@@ -84,10 +98,12 @@ const EN = {
   reclaimFailed: "Automatic re-claim failed: {detail}",
   checkinDone: "The plan is still active; nothing new to claim",
   checkinDoneWithPlan: "The plan is still active; nothing to claim ({plan})",
+  checkinIneligible: "No CodingPlan slot is currently available; try again later",
 
 
   usageHttp: "Reading the quota failed with HTTP {status}",
   readFailed: "Reading the quota failed: {detail}",
+  usageStale: "The quota refresh failed; showing the last successful snapshot: {detail}",
   usageTimeout: "Reading the quota timed out; please retry later",
 
   windowHours: "{hours}h window",
@@ -103,6 +119,12 @@ const EN = {
   endpointDenied: "Option {name} pointed at an address that is not accepted; using the official endpoint instead",
   optionInvalid: "Option {name} had an invalid value; using the default",
   foreignTargetBlocked: "Blocked a request to {origin}: it is not the AtomCode gateway",
+  diagnosticsStarted: "Read-only diagnostics started at http://127.0.0.1:{port}/",
+  diagnosticsFailed: "Read-only diagnostics could not start: {detail}",
+  autoClaimLabel: "Claim plans automatically",
+  autoClaimDescription: "Idempotently claim CodingPlan after sign-in and re-claim it when the plan expires.",
+  autoVersionLabel: "Follow the client version",
+  autoVersionDescription: "Refresh the version from AtomCode's official repository in the background for signing and User-Agent.",
 };
 
 const TABLES = { zh: ZH, en: EN };

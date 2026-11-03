@@ -12,7 +12,7 @@ Include the affected version, a minimal reproduction, impact, and any suggested 
 
 ## Supported versions
 
-Security fixes target the latest published `0.2.x` release and the current
+Security fixes target the latest published `0.3.x` release and the current
 `main` branch. Older commits and local forks are not supported.
 
 ## Security boundaries
@@ -28,3 +28,11 @@ Security fixes target the latest published `0.2.x` release and the current
 - OAuth login redirects are restricted to AtomGit and metadata responses are size-bounded.
 - Request bodies that cannot be replayed byte-for-byte are rejected; buffered
   bodies are capped at 64 MiB.
+- Only 401 and explicit credential/session 403 responses may refresh the
+  account. Plan, quota and other entitlement 403 responses keep the sign-in.
+- The diagnostics service binds only to `127.0.0.1`, validates `Host` and
+  `Origin`, requires a random per-process token for APIs, and sends a strict CSP.
+  It never calls AtomGit or the LLM gateway.
+- The persisted diagnostics state is schema-filtered and atomically written with
+  `0600` permissions. It excludes access and refresh tokens, complete account
+  ids, email addresses, prompts and raw upstream responses.

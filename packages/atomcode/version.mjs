@@ -107,7 +107,7 @@ export async function fetchAtomCodeVersion({
  *
  * @param {{fallback?: string, url?: string, fetchImpl?: Function, timeoutMs?: number,
  *           ttlMs?: number, failTtlMs?: number, onError?: Function}} [opts]
- * @returns {{get(): string, isLive(): boolean, ensure(): Promise<string>, poke(): void}}
+ * @returns {{get(): string, isLive(): boolean, status(): object, ensure(): Promise<string>, poke(): void}}
  */
 export function createVersionSource({
   fallback = "0.0.0",
@@ -117,6 +117,7 @@ export function createVersionSource({
   ttlMs = VERSION_TTL_MS,
   failTtlMs = VERSION_FAIL_TTL_MS,
   onError,
+  onChange,
 } = {}) {
   // Seeded with the fallback so `get()` is meaningful before any network:
   // at=0 means "stale", which is what makes the first ensure()/poke() fetch.
@@ -132,6 +133,17 @@ export function createVersionSource({
         cache.at = Date.now();
         cache.version = version;
         failedAt = 0;
+        try {
+          onChange?.({
+            version,
+            source: "manifest",
+            checkedAt: cache.at,
+            failedAt: undefined,
+            live: true,
+          });
+        } catch {
+          /* the observer is best-effort */
+        }
         return version;
       } catch (error) {
         failedAt = Date.now();
@@ -139,6 +151,17 @@ export function createVersionSource({
           onError?.(error);
         } catch {
           /* the logger is best-effort */
+        }
+        try {
+          onChange?.({
+            version: cache.version,
+            source: cache.at ? "cached" : "fallback",
+            checkedAt: cache.at || undefined,
+            failedAt,
+            live: false,
+          });
+        } catch {
+          /* the observer is best-effort */
         }
         return undefined;
       } finally {
@@ -159,6 +182,16 @@ export function createVersionSource({
     /** True while the cache is inside its TTL. */
     isLive() {
       return fresh();
+    },
+    /** Where the current version came from, for persisted diagnostics. */
+    status() {
+      return {
+        version: cache.version,
+        source: cache.at ? (fresh() ? "manifest" : "cached") : "fallback",
+        checkedAt: cache.at || undefined,
+        failedAt: failedAt || undefined,
+        live: fresh(),
+      };
     },
     /**
      * Best-effort current version.
