@@ -111,6 +111,12 @@ test("state store persists models, quota, errors and a private atomic file", asy
     ms: 1,
     checks: { signature: true, version: true, configuration: true },
   });
+  await store.recordSelfCheckForDigest(accountDigest("42"), {
+    ok: true,
+    at: Date.now(),
+    ms: 2,
+    checks: { signature: true, version: true, configuration: true },
+  });
   await store.recordVersion({
     version: "5.4.0",
     source: "manifest",
@@ -131,6 +137,7 @@ test("state store persists models, quota, errors and a private atomic file", asy
   const account = await reloaded.account(accountDigest("42"));
   assert.equal(account.lastError.status, 503);
   assert.equal(account.selfCheck.ok, true);
+  assert.equal(account.selfCheck.ms, 2);
 });
 
 test("a corrupt state file is ignored and replaced by the next write", async () => {

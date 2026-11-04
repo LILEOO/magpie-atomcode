@@ -353,6 +353,14 @@ export function createStateStore({ directory, onError } = {}) {
         current.updatedAt = Date.now();
       }).catch((error) => report(error));
     },
+    async recordSelfCheckForDigest(digest, check) {
+      if (!DIGEST_RE.test(String(digest ?? ""))) return;
+      return update((draft) => {
+        const current = account(draft, digest);
+        current.selfCheck = check;
+        current.updatedAt = Date.now();
+      }).catch((error) => report(error));
+    },
     async recordVersion(version) {
       if (!isObject(version) || !version.version) return;
       return update((draft) => {

@@ -42,9 +42,11 @@ https://llm-api.atomgit.com/v1 (OpenAI-compatible, SSE streams back untouched)
   with a clear marker instead of blanking the account row.
 - **Auto version tracking**: follows the AtomCode repo's current version by default (the official client force-updates); falls back to the built-in anchor, never blocking a request.
 - **Live model catalog**: each account pulls its own (varies by plan/tier), with a built-in snapshot as the offline fallback.
-- **Offline diagnostics**: a loopback-only read-only page at
-  `http://127.0.0.1:3478/` shows redacted account, model, quota, version and
-  last-error state, plus a network-free signature self-check.
+- **Offline diagnostics**: a loopback-only troubleshooting workspace at
+  `http://127.0.0.1:3478/` summarizes local readiness, quota windows, model
+  catalog, account and version state, then offers a network-free signature
+  self-check and a human-readable redacted report. It opens inside Magpie's
+  sandboxed plugin frame or directly in a browser.
 
 ## Current models (snapshot 2026-11-02)
 
@@ -169,7 +171,7 @@ Both defaults are on out of the box, and both act without being asked:
 For a 401 during sign-in or provider testing:
 
 1. Run `magpie version` and note the failure stage: OAuth callback, model catalog, quota, or chat request.
-2. Open the plugin's **AtomCode diagnostics** page. It shows the persisted model source, stale quota marker, version source, redacted last error and offline signature check without calling upstream.
+2. Open the plugin's **AtomCode diagnostics** page. The status summary separates local readability from upstream availability; quota, model, account and version details follow, with the redacted last error, offline self-check and expandable runtime metadata below.
 3. Try `atomcode login` with the official AtomCode client using the same account. If that also returns 401, the account is likely refused upstream rather than by this plugin.
 4. Open a bug report with the redacted report from the diagnostics page. Never include access tokens, refresh tokens, OAuth state, `plugin-auth.json`, email addresses, account IDs, or unredacted home-directory paths.
 

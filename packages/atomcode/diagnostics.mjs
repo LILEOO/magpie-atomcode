@@ -33,7 +33,7 @@ const securityHeaders = {
   "cache-control": "no-store",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
-  "cross-origin-resource-policy": "same-origin",
+  "cross-origin-resource-policy": "cross-origin",
 };
 
 /** A valid diagnostics port, or the fallback. */
@@ -59,6 +59,18 @@ export function originAllowed(origin, port, { required = false } = {}) {
   );
 }
 
+function corsHeaders(req, port, methods) {
+  const origin = req.headers.origin;
+  return {
+    ...(origin !== undefined && originAllowed(origin, port)
+      ? { "access-control-allow-origin": origin }
+      : {}),
+    "access-control-allow-methods": methods,
+    "access-control-allow-headers": DIAGNOSTICS_TOKEN_HEADER,
+    vary: "Origin",
+  };
+}
+
 function tokenAllowed(got, wanted) {
   const left = Buffer.from(String(got ?? ""));
   const right = Buffer.from(String(wanted ?? ""));
@@ -71,6 +83,28 @@ function headers(type, extra = {}) {
     ...(type ? { "content-type": type } : {}),
     ...extra,
   };
+}
+
+/**
+ * Magpie renders plugin pages inside a sandboxed frame, so the page must name
+ * the desktop ancestors and list its own loopback origins instead of relying on
+ * `'self'`, which a sandboxed frame does not always match in WebKit.
+ */
+function pagePolicy(port, nonce) {
+  const loopback = [
+    `http://127.0.0.1:${port}`,
+    `http://localhost:${port}`,
+  ].join(" ");
+  return [
+    "default-src 'none'",
+    `style-src 'self' ${loopback}`,
+    `script-src 'self' ${loopback} 'nonce-${nonce}'`,
+    `img-src 'self' ${loopback}`,
+    `connect-src 'self' ${loopback}`,
+    "base-uri 'none'",
+    "frame-ancestors 'self' wails://localhost http://wails.localhost",
+    "form-action 'none'",
+  ].join("; ");
 }
 
 async function readBody(req, max = 1024) {
@@ -178,10 +212,19 @@ export async function diagnosticsSnapshot({
   };
 }
 
-function htmlFor(template, token, locale) {
+function pageLocale(value, fallback) {
+  const language = String(value ?? "").toLowerCase();
+  if (language.startsWith("zh")) return "zh";
+  if (language.startsWith("en")) return "en";
+  return fallback === "zh" ? "zh" : "en";
+}
+
+function htmlFor(template, token, locale, theme, nonce) {
   return template
     .replaceAll("{{TOKEN}}", token)
-    .replaceAll("{{LOCALE}}", locale === "zh" ? "zh" : "en");
+    .replaceAll("{{LOCALE}}", locale === "zh" ? "zh" : "en")
+    .replaceAll("{{THEME}}", theme === "dark" || theme === "light" ? theme : "")
+    .replaceAll("{{CSP_NONCE}}", nonce);
 }
 
 /**
@@ -250,18 +293,20 @@ export function startDiagnosticsService({
     }
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+      const localeNow = pageLocale(url.searchParams.get("lang"), locale);
+      const theme = url.searchParams.get("theme");
+      const nonce = randomBytes(16).toString("base64");
       res
         .writeHead(
           200,
           headers(
             "text/html; charset=utf-8",
             {
-              "content-security-policy":
-                "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+              "content-security-policy": pagePolicy(portNow, nonce),
             },
           ),
         )
-        .end(htmlFor(await template(), token, locale));
+        .end(htmlFor(await template(), token, localeNow, theme, nonce));
       return;
     }
 
@@ -275,14 +320,39 @@ export function startDiagnosticsService({
       return;
     }
 
+    if (
+      req.method === "OPTIONS" &&
+      (url.pathname === "/api/state" || url.pathname === "/api/self-check")
+    ) {
+      if (!originAllowed(req.headers.origin, portNow, { required: true })) {
+        res.writeHead(403, headers("text/plain; charset=utf-8")).end("Forbidden");
+        return;
+      }
+      const methods =
+        url.pathname === "/api/self-check" ? "POST, OPTIONS" : "GET, OPTIONS";
+      res
+        .writeHead(204, headers(undefined, corsHeaders(req, portNow, methods)))
+        .end();
+      return;
+    }
+
     if (url.pathname === "/api/state" && req.method === "GET") {
-      if (!tokenAllowed(req.headers[DIAGNOSTICS_TOKEN_HEADER], token)) {
+      if (
+        !tokenAllowed(req.headers[DIAGNOSTICS_TOKEN_HEADER], token) ||
+        !originAllowed(req.headers.origin, portNow)
+      ) {
         res.writeHead(403, headers("text/plain; charset=utf-8")).end("Forbidden");
         return;
       }
       const snapshot = await stateSnapshot();
       res
-        .writeHead(200, headers("application/json; charset=utf-8"))
+        .writeHead(
+          200,
+          headers(
+            "application/json; charset=utf-8",
+            corsHeaders(req, portNow, "GET, OPTIONS"),
+          ),
+        )
         .end(JSON.stringify(snapshot));
       return;
     }
@@ -310,10 +380,16 @@ export function startDiagnosticsService({
       if (stateStore) {
         const state = await stateStore.read().catch(() => undefined);
         const digest = Object.keys(state?.accounts ?? {})[0] ?? accountDigest(undefined);
-        await stateStore.recordSelfCheck(digest, result);
+        await stateStore.recordSelfCheckForDigest(digest, result);
       }
       res
-        .writeHead(200, headers("application/json; charset=utf-8"))
+        .writeHead(
+          200,
+          headers(
+            "application/json; charset=utf-8",
+            corsHeaders(req, portNow, "POST, OPTIONS"),
+          ),
+        )
         .end(JSON.stringify(result));
       return;
     }

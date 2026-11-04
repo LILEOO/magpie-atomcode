@@ -128,28 +128,151 @@ test("loopback service serves a read-only page and token-gated APIs", async () =
 
     const page = await fetch(`http://127.0.0.1:${port}/`);
     assert.equal(page.status, 200);
-    assert.match(page.headers.get("content-security-policy"), /connect-src 'self'/);
+    const policy = page.headers.get("content-security-policy");
+    const loopback = `http://127.0.0.1:${port} http://localhost:${port}`;
+    for (const directive of ["style-src", "script-src", "img-src", "connect-src"]) {
+      assert.ok(
+        policy.includes(`${directive} 'self' ${loopback}`),
+        `${directive} names both loopback origins: ${policy}`,
+      );
+    }
+    assert.ok(
+      policy.includes(
+        "frame-ancestors 'self' wails://localhost http://wails.localhost",
+      ),
+      policy,
+    );
+    const nonceMatch = policy.match(/'nonce-([^']+)'/);
+    assert.ok(nonceMatch, `script-src has a nonce: ${policy}`);
+    assert.match(nonceMatch[1], /^[A-Za-z0-9+/]+={0,2}$/);
+    assert.doesNotMatch(
+      policy,
+      /frame-ancestors 'none'|'unsafe-inline'|'unsafe-eval'|\*/,
+    );
     assert.equal(page.headers.get("cache-control"), "no-store");
+    assert.equal(
+      page.headers.get("cross-origin-resource-policy"),
+      "cross-origin",
+    );
     const html = await page.text();
     assert.match(html, /name="atomcode-token" content="[a-f0-9]{64}"/);
+    assert.ok(html.includes(`<script nonce="${nonceMatch[1]}" src="./app.js"></script>`));
+    assert.doesNotMatch(html, /\{\{CSP_NONCE\}\}/);
     assert.match(html, /Read-only/);
+    assert.match(html, /<html lang="en" data-theme="">/);
+    assert.match(html, /href="\.\/icon\.svg"/);
+    assert.match(html, /href="\.\/app\.css"/);
+    assert.match(html, /src="\.\/app\.js"/);
     assert.doesNotMatch(html, /person@example\.com|Bearer/);
+
+    // Every reference stays relative, so the same page works at the origin root
+    // and behind a reverse proxy that mounts it under a prefix.
+    const proxyBase = `http://127.0.0.1:${port}/plugins/atomcode/`;
+    for (const [, reference] of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
+      assert.ok(!reference.startsWith("/"), `${reference} must stay relative`);
+      assert.ok(
+        new URL(reference, proxyBase).pathname.startsWith("/plugins/atomcode/"),
+        `${reference} resolves under the proxy prefix`,
+      );
+    }
+    assert.equal(
+      new URL("api/state", proxyBase).pathname,
+      "/plugins/atomcode/api/state",
+    );
 
     const css = await fetch(`http://127.0.0.1:${port}/app.css`);
     assert.equal(css.status, 200);
+    assert.equal(
+      css.headers.get("cross-origin-resource-policy"),
+      "cross-origin",
+    );
     assert.match(await css.text(), /--accent/);
+    const app = await fetch(`http://127.0.0.1:${port}/app.js`);
+    assert.equal(app.status, 200);
+    assert.equal(
+      app.headers.get("cross-origin-resource-policy"),
+      "cross-origin",
+    );
+    const script = await app.text();
+    assert.match(script, /api\("api\/state"\)/);
+    assert.match(script, /api\("api\/self-check"/);
     assert.equal((await fetch(`http://127.0.0.1:${port}/icon.svg`)).status, 200);
     assert.equal((await fetch(`http://127.0.0.1:${port}/missing`)).status, 404);
 
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/state`)).status, 403);
+
+    const statePreflight = await fetch(`http://127.0.0.1:${port}/api/state`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "null",
+        "access-control-request-method": "GET",
+        "access-control-request-headers": DIAGNOSTICS_TOKEN_HEADER,
+      },
+    });
+    assert.equal(statePreflight.status, 204);
+    assert.equal(statePreflight.headers.get("access-control-allow-origin"), "null");
+    assert.match(statePreflight.headers.get("access-control-allow-methods"), /GET/);
+    assert.equal(
+      statePreflight.headers.get("access-control-allow-headers"),
+      DIAGNOSTICS_TOKEN_HEADER,
+    );
+    assert.match(statePreflight.headers.get("vary"), /Origin/i);
+
+    const checkPreflight = await fetch(
+      `http://127.0.0.1:${port}/api/self-check`,
+      {
+        method: "OPTIONS",
+        headers: {
+          origin: `http://127.0.0.1:${port}`,
+          "access-control-request-method": "POST",
+          "access-control-request-headers": DIAGNOSTICS_TOKEN_HEADER,
+        },
+      },
+    );
+    assert.equal(checkPreflight.status, 204);
+    assert.equal(
+      checkPreflight.headers.get("access-control-allow-origin"),
+      `http://127.0.0.1:${port}`,
+    );
+    assert.match(
+      checkPreflight.headers.get("access-control-allow-methods"),
+      /POST/,
+    );
+    assert.equal(
+      (await fetch(`http://127.0.0.1:${port}/api/state`, {
+        method: "OPTIONS",
+        headers: {
+          origin: "http://evil.example",
+          "access-control-request-method": "GET",
+        },
+      })).status,
+      403,
+    );
+
     const state = await fetch(`http://127.0.0.1:${port}/api/state`, {
-      headers: { [DIAGNOSTICS_TOKEN_HEADER]: service.token },
+      headers: {
+        [DIAGNOSTICS_TOKEN_HEADER]: service.token,
+        origin: "null",
+      },
     });
     assert.equal(state.status, 200);
+    assert.equal(state.headers.get("access-control-allow-origin"), "null");
+    assert.match(state.headers.get("vary"), /Origin/i);
+    assert.doesNotMatch(state.headers.get("access-control-allow-origin"), /\*/);
     const snapshot = await state.json();
     assert.equal(snapshot.account.loginSource, "atomcode-cli");
     assert.equal(snapshot.quota.plan, "CodingPlan Lite");
     assert.equal(snapshot.config.autoVersion, false);
+
+    assert.equal(
+      (await fetch(`http://127.0.0.1:${port}/api/state`, {
+        headers: {
+          [DIAGNOSTICS_TOKEN_HEADER]: service.token,
+          origin: "http://evil.example",
+        },
+      })).status,
+      403,
+    );
 
     const wrongOrigin = await fetch(`http://127.0.0.1:${port}/api/self-check`, {
       method: "POST",
@@ -168,7 +291,19 @@ test("loopback service serves a read-only page and token-gated APIs", async () =
       },
     });
     assert.equal(checked.status, 200);
+    assert.equal(
+      checked.headers.get("access-control-allow-origin"),
+      `http://127.0.0.1:${port}`,
+    );
     assert.equal((await checked.json()).ok, true);
+    const stateAfterCheck = await fetch(`http://127.0.0.1:${port}/api/state`, {
+      headers: {
+        [DIAGNOSTICS_TOKEN_HEADER]: service.token,
+        origin: "null",
+      },
+    });
+    assert.equal(stateAfterCheck.status, 200);
+    assert.equal((await stateAfterCheck.json()).selfCheck.ok, true);
 
     const withBody = await fetch(`http://127.0.0.1:${port}/api/self-check`, {
       method: "POST",
@@ -184,6 +319,14 @@ test("loopback service serves a read-only page and token-gated APIs", async () =
       headers: { host: `evil.example:${port}` },
     });
     assert.equal(forbiddenHost.status, 403);
+
+    const localized = await fetch(
+      `http://127.0.0.1:${port}/?lang=zh-CN&theme=dark`,
+    );
+    assert.equal(localized.status, 200);
+    assert.match(await localized.text(), /<html lang="zh" data-theme="dark">/);
+    const localizedPolicy = localized.headers.get("content-security-policy");
+    assert.notEqual(localizedPolicy, policy);
   } finally {
     await service.stop();
   }

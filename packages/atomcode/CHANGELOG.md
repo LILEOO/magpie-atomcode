@@ -25,6 +25,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 - Minimum Magpie version is now `0.1.2629`, which provides native provider
   switches and page services.
+- The AtomCode diagnostics page is now a focused troubleshooting workspace with
+  a local-status summary, quota-first layout, model catalog, progressive
+  technical details and a human-readable redacted report.
 - Usage failures after a successful read now return the persisted stale quota
   snapshot with `stale: true` instead of replacing the account's windows with
   an empty result.
@@ -48,6 +51,11 @@ Keep a Changelog and the project uses semantic versioning.
 - Upstream legacy `window_token_*` fields that contain call counts are no longer
   mislabeled as token quotas. Token-only rows are inferred from token-specific
   fields without call counters; `current_usage` also requires an explicit unit.
+- The embedded diagnostics page now loads inside Magpie's
+  `sandbox="allow-scripts"` plugin frame, including its styles, scripts, images,
+  token-gated API preflights and requests. Each page response uses a fresh CSP
+  script nonce. Host and token checks remain loopback-only, and CORS never uses
+  a wildcard origin.
 
 ### Security
 
