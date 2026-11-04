@@ -113,6 +113,12 @@ magpie plugin options atomcode '{"auto_claim":false}'
 magpie plugin options atomcode '{"auto_version":false}'
 ```
 
+The manifest defaults each AtomCode account to 8 simultaneous requests. This
+helps when several agents, sessions or sub-tasks run in parallel; it does not
+make a single streamed completion faster. A controlled live probe at 4, 8 and
+12 simultaneous short requests returned HTTP 200 without 429 or 5xx responses,
+so 8 is the conservative default and the provider editor can override it.
+
 ## Security boundaries
 
 All of these are enforced in code, and `npm test` covers each one:

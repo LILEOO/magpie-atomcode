@@ -28,6 +28,10 @@ Keep a Changelog and the project uses semantic versioning.
 - The AtomCode diagnostics page is now a focused troubleshooting workspace with
   a local-status summary, quota-first layout, model catalog, progressive
   technical details and a human-readable redacted report.
+- The default per-account concurrency is now 8 instead of 4. Controlled live
+  probes at 4, 8 and 12 simultaneous short requests all returned HTTP 200 with
+  no 429 or 5xx responses; 8 keeps additional parallel headroom while remaining
+  conservative. Magpie's provider setting can still override it.
 - Usage failures after a successful read now return the persisted stale quota
   snapshot with `stale: true` instead of replacing the account's windows with
   an empty result.

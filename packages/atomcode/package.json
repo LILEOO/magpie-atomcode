@@ -73,7 +73,7 @@
   },
   "magpie": {
     "icon": "https://atomgit.com/favicon.ico",
-    "maxConcurrency": 4,
+    "maxConcurrency": 8,
     "options": {
       "locale": "auto",
       "clientVersion": "5.2.3",

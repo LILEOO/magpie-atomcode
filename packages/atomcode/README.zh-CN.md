@@ -103,6 +103,11 @@ magpie plugin options atomcode '{"auto_claim":false}'
 magpie plugin options atomcode '{"auto_version":false}'
 ```
 
+插件清单默认允许每个 AtomCode 账号同时运行 8 个请求。只有多个 Agent、会话或
+子任务并行时才会看到收益；单个流式回答不会因此变快。受控真机测试中，4、8、12
+个短请求同时发出均返回 HTTP 200，没有出现 429 或 5xx，因此默认采用较保守的
+8；仍可在供应商设置中按账号覆盖这个值。
+
 ## 安全边界
 
 下面这些都在代码里强制，`npm test` 逐一覆盖：
